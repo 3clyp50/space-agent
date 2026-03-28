@@ -2,13 +2,15 @@ const STORAGE_KEYS = {
   draft: "agent-one.chat.draft",
   history: "agent-one.chat.history",
   settings: "agent-one.chat.settings",
-  systemPrompt: "agent-one.chat.system-prompt"
+  systemPrompt: "agent-one.chat.system-prompt",
+  systemPromptMode: "agent-one.chat.system-prompt-mode"
 };
 
 export const DEFAULT_CHAT_SETTINGS = {
   apiEndpoint: "https://openrouter.ai/api/v1/chat/completions",
   apiKey: "",
-  model: "openai/gpt-4o-mini"
+  model: "openai/gpt-5.4-mini",
+  paramsText: ""
 };
 
 function readJson(key, fallbackValue) {
@@ -65,9 +67,24 @@ export function clearChatDraft() {
 }
 
 export function loadSystemPrompt() {
-  return window.localStorage.getItem(STORAGE_KEYS.systemPrompt) || "";
+  return window.localStorage.getItem(STORAGE_KEYS.systemPromptMode) === "custom"
+    ? window.localStorage.getItem(STORAGE_KEYS.systemPrompt) || ""
+    : "";
 }
 
 export function saveSystemPrompt(systemPrompt) {
-  window.localStorage.setItem(STORAGE_KEYS.systemPrompt, systemPrompt);
+  const normalizedPrompt = typeof systemPrompt === "string" ? systemPrompt : "";
+
+  if (!normalizedPrompt.trim()) {
+    clearSystemPrompt();
+    return;
+  }
+
+  window.localStorage.setItem(STORAGE_KEYS.systemPrompt, normalizedPrompt);
+  window.localStorage.setItem(STORAGE_KEYS.systemPromptMode, "custom");
+}
+
+export function clearSystemPrompt() {
+  window.localStorage.removeItem(STORAGE_KEYS.systemPrompt);
+  window.localStorage.removeItem(STORAGE_KEYS.systemPromptMode);
 }

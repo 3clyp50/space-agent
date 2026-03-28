@@ -1,5 +1,7 @@
 import { DEFAULT_CHAT_SETTINGS } from "./storage.js";
+import { buildMessageContentForApi } from "./attachments.js";
 import { buildProxyUrl, isProxyableExternalUrl } from "../core/proxy-url.js";
+import { parseLlmParamsText } from "./llm-params.js";
 
 function createHeaders(endpoint, apiKey) {
   const headers = {
@@ -62,7 +64,7 @@ function extractNonStreamingMessage(payload) {
   return extractTextContent(message.content || choice.text || "");
 }
 
-function createRequestBody(settings, systemPrompt, messages) {
+export function buildPromptMessages(systemPrompt, messages) {
   const requestMessages = [];
   const effectiveSystemPrompt = typeof systemPrompt === "string" ? systemPrompt.trim() : "";
 
@@ -80,11 +82,19 @@ function createRequestBody(settings, systemPrompt, messages) {
 
     requestMessages.push({
       role: message.role,
-      content: message.content
+      content: buildMessageContentForApi(message)
     });
   });
 
+  return requestMessages;
+}
+
+function createRequestBody(settings, systemPrompt, messages) {
+  const requestMessages = buildPromptMessages(systemPrompt, messages);
+  const requestParams = parseLlmParamsText(settings.paramsText || "");
+
   return {
+    ...requestParams,
     model: settings.model || DEFAULT_CHAT_SETTINGS.model,
     stream: true,
     messages: requestMessages
@@ -96,8 +106,8 @@ function resolveChatRequestUrl(apiEndpoint) {
     return apiEndpoint;
   }
 
-  if (window.agentOne?.proxy?.buildUrl) {
-    return window.agentOne.proxy.buildUrl(apiEndpoint);
+  if (window.A1?.proxy?.buildUrl) {
+    return window.A1.proxy.buildUrl(apiEndpoint);
   }
 
   return buildProxyUrl(apiEndpoint);

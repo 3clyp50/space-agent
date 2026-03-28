@@ -1,44 +1,120 @@
-const EXECUTE_BLOCK_PATTERN = /(`{3,}|~{3,})execute(?:[^\S\r\n]+[^\r\n]+)?\r?\n([\s\S]*?)\r?\n\1/g;
+export const EXECUTION_SEPARATOR = "_____javascript";
+
 const EXECUTION_CONTEXT_KEY = "__agentOneChatExecutionContext";
 const SHARED_STATE_KEY = "__agentOneChatSharedState";
 const CONSOLE_METHODS = ["log", "info", "warn", "error", "debug", "dir", "table", "assert"];
-const INTERNAL_SCOPE_KEYS = new Set(["__agentOneCode", "__agentOneScope", "__agentOneWindow"]);
-const RESERVED_SCOPE_KEYS = new Set([
-  "A1",
-  "agentContext",
-  "agentOne",
-  "browserState",
-  "console",
-  "ctx",
-  "document",
-  "globalThis",
-  "page",
-  "self",
-  "state",
-  "window"
-]);
+const INTERNAL_SCOPE_KEYS = new Set(["__agentOneScope", "__agentOneWindow"]);
+const WINDOW_ALIAS_KEYS = new Set(["page", "window", "globalThis", "self"]);
+const MAX_STRING_LENGTH = 220;
+const MAX_COLLECTION_ENTRIES = 8;
+const MAX_FORMAT_DEPTH = 2;
+
+function findLineStart(content, index) {
+  let lineStart = index;
+
+  while (lineStart > 0 && content[lineStart - 1] !== "\n" && content[lineStart - 1] !== "\r") {
+    lineStart -= 1;
+  }
+
+  return lineStart;
+}
+
+function findLineEnd(content, index) {
+  let lineEnd = index;
+
+  while (lineEnd < content.length && content[lineEnd] !== "\n" && content[lineEnd] !== "\r") {
+    lineEnd += 1;
+  }
+
+  return lineEnd;
+}
+
+function isSeparatorLine(content, separatorIndex) {
+  const lineStart = findLineStart(content, separatorIndex);
+  const lineEnd = findLineEnd(content, separatorIndex + EXECUTION_SEPARATOR.length);
+
+  return (
+    !content.slice(lineStart, separatorIndex).trim() &&
+    !content.slice(separatorIndex + EXECUTION_SEPARATOR.length, lineEnd).trim()
+  );
+}
+
+function getCodeStart(content, separatorIndex) {
+  let codeStart = findLineEnd(content, separatorIndex + EXECUTION_SEPARATOR.length);
+
+  if (content.startsWith("\r\n", codeStart)) {
+    codeStart += 2;
+  } else if (content[codeStart] === "\n" || content[codeStart] === "\r") {
+    codeStart += 1;
+  }
+
+  return codeStart;
+}
+
+function findExecutionBlock(content) {
+  if (typeof content !== "string" || !content.trim()) {
+    return null;
+  }
+
+  let searchIndex = 0;
+
+  while (searchIndex < content.length) {
+    const separatorIndex = content.indexOf(EXECUTION_SEPARATOR, searchIndex);
+
+    if (separatorIndex === -1) {
+      return null;
+    }
+
+    if (isSeparatorLine(content, separatorIndex)) {
+      const index = findLineStart(content, separatorIndex);
+      const codeStart = getCodeStart(content, separatorIndex);
+
+      return {
+        code: content.slice(codeStart),
+        codeStart,
+        index,
+        raw: content.slice(index)
+      };
+    }
+
+    searchIndex = separatorIndex + EXECUTION_SEPARATOR.length;
+  }
+
+  return null;
+}
 
 export function extractExecuteBlocks(content) {
-  if (typeof content !== "string" || !content.trim()) {
-    return [];
+  const block = findExecutionBlock(content);
+  return block ? [block] : [];
+}
+
+function createAsyncRunner(code) {
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  return new AsyncFunction(
+    "__agentExecution",
+    `
+      const __agentOneScope = __agentExecution.scope
+      const __agentOneWindow = __agentExecution.targetWindow
+      return await (async function () {
+        with (__agentOneScope) {
+${code}
+        }
+      }).call(__agentOneWindow)
+    `
+  );
+}
+
+function tryCreateAsyncRunner(code) {
+  try {
+    createAsyncRunner(code);
+    return null;
+  } catch (error) {
+    return error;
   }
+}
 
-  const blocks = [];
-  const pattern = new RegExp(EXECUTE_BLOCK_PATTERN);
-  let match = pattern.exec(content);
-
-  while (match) {
-    blocks.push({
-      code: match[2],
-      fence: match[1],
-      index: match.index,
-      raw: match[0]
-    });
-
-    match = pattern.exec(content);
-  }
-
-  return blocks;
+function normalizeExecutionSource(code) {
+  return typeof code === "string" ? code.replace(/\r\n/g, "\n") : "";
 }
 
 function isNodeLike(targetWindow, value) {
@@ -47,10 +123,6 @@ function isNodeLike(targetWindow, value) {
 
 function isElementLike(targetWindow, value) {
   return Boolean(targetWindow.Element && value instanceof targetWindow.Element);
-}
-
-function isWindowLike(targetWindow, value) {
-  return value === targetWindow;
 }
 
 function summarizeElement(element) {
@@ -69,10 +141,6 @@ function summarizeNode(targetWindow, value) {
     return summarizeElement(value);
   }
 
-  if (!isNodeLike(targetWindow, value)) {
-    return "";
-  }
-
   if (value.nodeType === targetWindow.Node.TEXT_NODE) {
     return `#text(${JSON.stringify((value.textContent || "").trim())})`;
   }
@@ -81,26 +149,24 @@ function summarizeNode(targetWindow, value) {
 }
 
 function formatString(value) {
-  if (value.length <= 220) {
+  if (value.length <= MAX_STRING_LENGTH) {
     return value;
   }
 
-  return `${value.slice(0, 217)}...`;
+  return `${value.slice(0, MAX_STRING_LENGTH - 3)}...`;
 }
 
 function formatEntries(entries, opener, closer, options) {
-  const { targetWindow, depth, seen } = options;
-  const maxEntries = 8;
-  const nextDepth = depth + 1;
-  const renderedEntries = entries.slice(0, maxEntries).map(([key, value]) => {
+  const { depth, seen, targetWindow } = options;
+  const renderedEntries = entries.slice(0, MAX_COLLECTION_ENTRIES).map(([key, value]) => {
     return `${key}: ${formatExecutionValue(value, {
-      targetWindow,
-      depth: nextDepth,
-      seen
+      depth: depth + 1,
+      seen,
+      targetWindow
     })}`;
   });
 
-  if (entries.length > maxEntries) {
+  if (entries.length > MAX_COLLECTION_ENTRIES) {
     renderedEntries.push("...");
   }
 
@@ -108,19 +174,18 @@ function formatEntries(entries, opener, closer, options) {
 }
 
 function formatArrayLike(values, label, options) {
-  const { targetWindow, depth, seen } = options;
-  const maxEntries = 8;
+  const { depth, seen, targetWindow } = options;
   const renderedValues = Array.from(values)
-    .slice(0, maxEntries)
+    .slice(0, MAX_COLLECTION_ENTRIES)
     .map((value) =>
       formatExecutionValue(value, {
-        targetWindow,
         depth: depth + 1,
-        seen
+        seen,
+        targetWindow
       })
     );
 
-  if (values.length > maxEntries) {
+  if (values.length > MAX_COLLECTION_ENTRIES) {
     renderedValues.push("...");
   }
 
@@ -166,7 +231,7 @@ function formatExecutionValue(value, options) {
     return formatError(value);
   }
 
-  if (isWindowLike(targetWindow, value)) {
+  if (value === targetWindow) {
     return `[Window ${targetWindow.location?.href || ""}]`;
   }
 
@@ -183,54 +248,54 @@ function formatExecutionValue(value, options) {
   }
 
   if (Array.isArray(value)) {
-    if (depth >= 2) {
+    if (depth >= MAX_FORMAT_DEPTH) {
       return `Array(${value.length})`;
     }
 
     return formatArrayLike(value, "Array", {
-      targetWindow,
       depth,
-      seen
+      seen,
+      targetWindow
     });
   }
 
   if (targetWindow.NodeList && value instanceof targetWindow.NodeList) {
     return formatArrayLike(Array.from(value), "NodeList", {
-      targetWindow,
       depth,
-      seen
+      seen,
+      targetWindow
     });
   }
 
   if (targetWindow.HTMLCollection && value instanceof targetWindow.HTMLCollection) {
     return formatArrayLike(Array.from(value), "HTMLCollection", {
-      targetWindow,
       depth,
-      seen
+      seen,
+      targetWindow
     });
   }
 
   if (value instanceof Map) {
-    if (depth >= 2) {
+    if (depth >= MAX_FORMAT_DEPTH) {
       return `Map(${value.size})`;
     }
 
     return formatEntries(Array.from(value.entries()), "Map { ", " }", {
-      targetWindow,
       depth,
-      seen
+      seen,
+      targetWindow
     });
   }
 
   if (value instanceof Set) {
-    if (depth >= 2) {
+    if (depth >= MAX_FORMAT_DEPTH) {
       return `Set(${value.size})`;
     }
 
     return formatArrayLike(Array.from(value.values()), "Set", {
-      targetWindow,
       depth,
-      seen
+      seen,
+      targetWindow
     });
   }
 
@@ -241,15 +306,14 @@ function formatExecutionValue(value, options) {
 
     seen.add(value);
 
-    if (depth >= 2) {
+    if (depth >= MAX_FORMAT_DEPTH) {
       return `[${value.constructor?.name || "Object"}]`;
     }
 
-    const entries = Object.entries(value);
-    return formatEntries(entries, "{ ", " }", {
-      targetWindow,
+    return formatEntries(Object.entries(value), "{ ", " }", {
       depth,
-      seen
+      seen,
+      targetWindow
     });
   }
 
@@ -266,6 +330,7 @@ function createConsoleRecorder(methodName, originalMethod, logs, targetWindow) {
       if (originalMethod) {
         originalMethod(...args);
       }
+
       return;
     }
 
@@ -285,12 +350,14 @@ function createConsoleRecorder(methodName, originalMethod, logs, targetWindow) {
       text
     });
 
-    if (originalMethod) {
-      try {
-        originalMethod(...args);
-      } catch (error) {
-        // Ignore console implementation edge cases.
-      }
+    if (!originalMethod) {
+      return;
+    }
+
+    try {
+      originalMethod(...args);
+    } catch (error) {
+      // Ignore console implementation edge cases.
     }
   };
 }
@@ -300,18 +367,17 @@ function patchConsole(targetWindow, logs) {
     return () => {};
   }
 
-  const targetConsole = targetWindow.console;
   const originalMethods = [];
 
   CONSOLE_METHODS.forEach((methodName) => {
-    if (typeof targetConsole[methodName] !== "function") {
+    if (typeof targetWindow.console[methodName] !== "function") {
       return;
     }
 
-    const originalMethod = targetConsole[methodName].bind(targetConsole);
+    const originalMethod = targetWindow.console[methodName].bind(targetWindow.console);
 
     try {
-      targetConsole[methodName] = createConsoleRecorder(methodName, originalMethod, logs, targetWindow);
+      targetWindow.console[methodName] = createConsoleRecorder(methodName, originalMethod, logs, targetWindow);
       originalMethods.push([methodName, originalMethod]);
     } catch (error) {
       // Ignore read-only console implementations.
@@ -321,7 +387,7 @@ function patchConsole(targetWindow, logs) {
   return () => {
     originalMethods.forEach(([methodName, originalMethod]) => {
       try {
-        targetConsole[methodName] = originalMethod;
+        targetWindow.console[methodName] = originalMethod;
       } catch (error) {
         // Ignore read-only console implementations.
       }
@@ -329,29 +395,58 @@ function patchConsole(targetWindow, logs) {
   };
 }
 
+function isConstructable(value) {
+  if (typeof value !== "function") {
+    return false;
+  }
+
+  try {
+    Reflect.construct(String, [], value);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function getScopedWindowValue(targetWindow, key, boundWindowMethods) {
+  const value = targetWindow[key];
+
+  if (typeof value !== "function" || isConstructable(value)) {
+    return value;
+  }
+
+  const cachedBoundMethod = boundWindowMethods.get(value);
+
+  if (cachedBoundMethod) {
+    return cachedBoundMethod;
+  }
+
+  const boundWindowMethod = value.bind(targetWindow);
+  boundWindowMethods.set(value, boundWindowMethod);
+  return boundWindowMethod;
+}
+
 function createExecutionScope(targetWindow, sharedState) {
+  const boundWindowMethods = new WeakMap();
+
   return new Proxy(sharedState, {
     has(_target, key) {
       if (key === Symbol.unscopables) {
         return false;
       }
 
-      if (typeof key === "string" && INTERNAL_SCOPE_KEYS.has(key)) {
-        return false;
-      }
-
-      return true;
+      return !(typeof key === "string" && INTERNAL_SCOPE_KEYS.has(key));
     },
     get(target, key) {
       if (key === Symbol.unscopables) {
         return undefined;
       }
 
-      if (key === "ctx" || key === "state" || key === "agentContext" || key === "browserState") {
-        return target;
+      if (typeof key !== "string") {
+        return Reflect.get(target, key);
       }
 
-      if (key === "page" || key === "window" || key === "globalThis" || key === "self") {
+      if (WINDOW_ALIAS_KEYS.has(key)) {
         return targetWindow;
       }
 
@@ -367,15 +462,11 @@ function createExecutionScope(targetWindow, sharedState) {
         return targetWindow.A1;
       }
 
-      if (key === "agentOne") {
-        return targetWindow.agentOne;
-      }
-
       if (Reflect.has(target, key)) {
         return Reflect.get(target, key);
       }
 
-      return targetWindow[key];
+      return getScopedWindowValue(targetWindow, key, boundWindowMethods);
     },
     set(target, key, value) {
       if (typeof key !== "string") {
@@ -383,23 +474,7 @@ function createExecutionScope(targetWindow, sharedState) {
         return true;
       }
 
-      if (key === "ctx" || key === "state" || key === "agentContext" || key === "browserState") {
-        if (value && typeof value === "object") {
-          Object.keys(target).forEach((targetKey) => delete target[targetKey]);
-          Object.assign(target, value);
-        }
-
-        return true;
-      }
-
-      if (
-        key === "console" ||
-        key === "page" ||
-        key === "window" ||
-        key === "globalThis" ||
-        key === "self" ||
-        key === "document"
-      ) {
+      if (key === "A1" || WINDOW_ALIAS_KEYS.has(key) || key === "console" || key === "document") {
         return false;
       }
 
@@ -408,7 +483,7 @@ function createExecutionScope(targetWindow, sharedState) {
         return true;
       }
 
-      if (key in targetWindow && !RESERVED_SCOPE_KEYS.has(key)) {
+      if (key in targetWindow) {
         try {
           targetWindow[key] = value;
           return true;
@@ -434,63 +509,69 @@ function buildSourceUrl(runId) {
   return `agent-one-chat-execute-${runId}.js`;
 }
 
-function runInAsyncContext(execution) {
-  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-  const runner = new AsyncFunction(
-    "__agentExecution",
-    `
-      const __agentOneScope = __agentExecution.scope
-      const __agentOneWindow = __agentExecution.targetWindow
-      return await (async function () {
-        with (__agentOneScope) {
-${execution.code}
-        }
-      }).call(__agentOneWindow)
-    `
-  );
-
-  return runner(execution);
+function flattenExecutionMessageValue(value) {
+  return String(value ?? "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .join("\\n");
 }
 
-function normalizeDuration(startTime, endTime) {
-  return Math.max(0, Math.round((endTime - startTime) * 100) / 100);
+function formatExecutionResultLines(result) {
+  const status = typeof result?.status === "string" && result.status.trim() ? result.status.trim() : "done";
+  const lines = [`execution ${status}`];
+  const prints = Array.isArray(result?.logs) ? result.logs : [];
+
+  prints.forEach((entry) => {
+    const level = typeof entry?.level === "string" && entry.level.trim() ? entry.level.trim() : "log";
+    lines.push(`${level}: ${flattenExecutionMessageValue(entry?.text ?? "")}`);
+  });
+
+  if (result?.result !== undefined) {
+    lines.push(`result: ${flattenExecutionMessageValue(result.resultText)}`);
+  }
+
+  if (!result?.error?.text && result?.result === undefined && !prints.length) {
+    lines.push("warning: JavaScript finished but returned no result.");
+    lines.push("warning: Use top-level return to send the final value back.");
+  }
+
+  if (result?.error?.text) {
+    lines.push(`error: ${flattenExecutionMessageValue(result.error.text)}`);
+  }
+
+  return lines;
 }
 
-function createSerializableExecutionResult(result) {
-  const payload = {
-    durationMs: result.durationMs,
-    status: result.status
+function createExecutionError(error) {
+  return {
+    message: error?.message || String(error),
+    name: error?.name || "Error",
+    stack: error?.stack || "",
+    text: formatError(error)
   };
-
-  if (result.error) {
-    payload.error = result.error.text;
-  }
-
-  if (Array.isArray(result.logs) && result.logs.length > 0) {
-    payload.prints = result.logs.map((entry) => ({
-      level: entry.level,
-      text: entry.text
-    }));
-  }
-
-  if (result.result !== undefined) {
-    payload.result = result.resultText;
-  }
-
-  return payload;
 }
 
-export function serializeExecutionResults(results) {
-  return results.map((result) => createSerializableExecutionResult(result));
+function createExecutionOutputSnapshot(result) {
+  return {
+    outputLines: formatExecutionResultLines(result),
+    status: typeof result?.status === "string" && result.status.trim() ? result.status.trim() : "done"
+  };
+}
+
+export function createExecutionOutputSnapshots(results) {
+  if (!Array.isArray(results) || !results.length) {
+    return [];
+  }
+
+  return results.map((result) => createExecutionOutputSnapshot(result));
 }
 
 export function formatExecutionResultsMessage(results) {
-  return [
-    "Code execution output:",
-    "```json",
-    JSON.stringify(serializeExecutionResults(results), null, 2),
-    "```"
-  ].join("\n");
+  return createExecutionOutputSnapshots(results)
+    .map((result) => result.outputLines.join("\n"))
+    .join("\n\n")
+    .trim();
 }
 
 export function createExecutionContext(options = {}) {
@@ -503,84 +584,51 @@ export function createExecutionContext(options = {}) {
 
   const sharedState = targetWindow[SHARED_STATE_KEY] || Object.create(null);
   targetWindow[SHARED_STATE_KEY] = sharedState;
-  targetWindow.__agentOneChatContext = sharedState;
 
   const executionContext = {
     runCount: 0,
     sharedState,
     async execute(code) {
-      const source = typeof code === "string" ? code.replace(/\r\n/g, "\n") : "";
       const logs = [];
       const runId = executionContext.runCount + 1;
-      const startedAt = targetWindow.performance?.now?.() ?? Date.now();
       const scope = createExecutionScope(targetWindow, sharedState);
       const restoreConsole = patchConsole(targetWindow, logs);
-      const execution = {
-        code: `${source}\n//# sourceURL=${buildSourceUrl(runId)}`,
-        scope,
-        targetWindow
-      };
+      const normalizedCode = normalizeExecutionSource(code);
+      const runnableCode = `${normalizedCode}\n//# sourceURL=${buildSourceUrl(runId)}`;
+      const compileError = tryCreateAsyncRunner(runnableCode);
 
       let result;
-      let error = null;
+      let error = compileError || null;
 
       executionContext.runCount = runId;
 
-      try {
-        result = await runInAsyncContext(execution);
-      } catch (runError) {
-        error = runError;
-      } finally {
-        restoreConsole();
+      if (!error) {
+        try {
+          const runner = createAsyncRunner(runnableCode);
+          result = await runner({
+            scope,
+            targetWindow
+          });
+        } catch (runError) {
+          error = runError;
+        }
       }
 
-      const endedAt = targetWindow.performance?.now?.() ?? Date.now();
+      restoreConsole();
 
       return {
-        code: source,
-        durationMs: normalizeDuration(startedAt, endedAt),
-        error: error
-          ? {
-              name: error.name || "Error",
-              message: error.message || String(error),
-              stack: error.stack || "",
-              text: formatError(error)
-            }
-          : null,
+        error: error ? createExecutionError(error) : null,
         logs,
         result,
-        resultText: error
-          ? "undefined"
-          : formatExecutionValue(result, {
-              targetWindow
-            }),
+        resultText:
+          error || result === undefined
+            ? ""
+            : formatExecutionValue(result, {
+                targetWindow
+              }),
         runId,
         status: error ? "error" : "success"
       };
-    },
-    async executeAll(codeBlocks, options = {}) {
-      if (!Array.isArray(codeBlocks) || !codeBlocks.length) {
-        return [];
-      }
-
-      const results = [];
-
-      for (let index = 0; index < codeBlocks.length; index += 1) {
-        const code = codeBlocks[index];
-
-        if (typeof options.onBeforeBlock === "function") {
-          await options.onBeforeBlock({
-            block: null,
-            code,
-            index,
-            total: codeBlocks.length
-          });
-        }
-
-        results.push(await executionContext.execute(code));
-      }
-
-      return results;
     },
     async executeFromContent(content, options = {}) {
       const blocks = extractExecuteBlocks(content);
@@ -603,13 +651,13 @@ export function createExecutionContext(options = {}) {
           });
         }
 
-        results.push(await executionContext.execute(block.code));
+        results.push({
+          ...(await executionContext.execute(block.code)),
+          block
+        });
       }
 
-      return results.map((result, index) => ({
-        ...result,
-        block: blocks[index]
-      }));
+      return results;
     },
     reset() {
       Object.keys(sharedState).forEach((key) => {
