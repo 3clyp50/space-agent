@@ -128,6 +128,11 @@
   background: var(--agent-thread-user-bubble-bg);
 }
 
+.agent-thread-surface .message-row.user .message-bubble.is-queued {
+  border: 1px dashed var(--agent-thread-attachment-border);
+  background: rgba(19, 32, 51, 0.62);
+}
+
 .agent-thread-surface .message-row.user .message-content {
   text-align: left;
 }
@@ -462,8 +467,16 @@
 }
 
 .agent-thread-surface .execution-detail-button {
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
   color: var(--agent-thread-muted-color);
   font-size: 0.75rem;
+}
+
+.agent-thread-surface .execution-detail-button:hover:not(:disabled),
+.agent-thread-surface .execution-detail-button:focus-visible:not(:disabled) {
+  background: rgba(19, 32, 51, 0.94);
 }
 
 .agent-thread-surface .execution-detail-button x-icon {
@@ -472,6 +485,17 @@
 
 .agent-thread-surface .execution-detail-button.is-active {
   color: var(--color-accent-primary);
+}
+
+.agent-thread-surface .message-queued-state {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  color: var(--agent-thread-muted-color);
+  font-size: 0.72rem;
+  line-height: 1.35;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .agent-thread-surface .raw-output-frame {

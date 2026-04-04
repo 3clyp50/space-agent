@@ -15,10 +15,15 @@ import {
 } from "/mod/_core/onscreen_agent/attachments.js";
 
 const CONFIG_PERSIST_DELAY_MS = 180;
+const AGENT_IDLE_HINT_DELAY_MS = 2000;
+const AGENT_IDLE_HINT_HIDE_DELAY_MS = 3200;
 const DRAG_CLICK_THRESHOLD = 6;
 const MAX_COMPACT_TRIM_ATTEMPTS = 4;
 const MAX_PROTOCOL_RETRY_COUNT = 2;
 const POSITION_MARGIN = 16;
+const UI_BUBBLE_ENTER_DURATION_MS = 420;
+const UI_BUBBLE_EXIT_DURATION_MS = 180;
+const IDLE_HINT_BUBBLE_TEXT = "Drag me, tap me.";
 
 function getRuntime() {
   const runtime = globalThis.space;
@@ -230,6 +235,24 @@ function isAbortError(error) {
   return Boolean(error && (error.name === "AbortError" || error.code === 20));
 }
 
+function clearTimer(timerId) {
+  if (timerId) {
+    window.clearTimeout(timerId);
+  }
+
+  return 0;
+}
+
+function normalizeUiBubbleHideDelay(value) {
+  const normalizedValue = Number(value);
+
+  if (!Number.isFinite(normalizedValue) || normalizedValue <= 0) {
+    return 0;
+  }
+
+  return Math.max(0, Math.round(normalizedValue));
+}
+
 const model = {
   activeRequestController: null,
   configPersistTimer: 0,
@@ -244,12 +267,16 @@ const model = {
   historyPersistPromise: null,
   historyText: "",
   historyTokenCount: 0,
+  hasInteracted: false,
   initializationPromise: null,
-  isCollapsed: false,
+  interactionHintTimer: 0,
+  isCollapsed: true,
   isCompactingHistory: false,
   isInitialized: false,
   isLoadingDefaultSystemPrompt: false,
+  isUiBubbleMounted: false,
   isSending: false,
+  nextUiBubble: null,
   pendingHistorySnapshot: null,
   pendingStreamingMessage: null,
   promptHistoryMessages: [],
@@ -274,6 +301,11 @@ const model = {
   streamingRenderFrame: 0,
   dragMoveHandler: null,
   dragEndHandler: null,
+  uiBubbleAutoHideTimer: 0,
+  uiBubbleEnterTimer: 0,
+  uiBubbleExitTimer: 0,
+  uiBubblePhase: "",
+  uiBubbleText: "",
   settings: {
     apiEndpoint: "",
     apiKey: "",
@@ -454,6 +486,10 @@ const model = {
     return this.agentY < Math.max(140, this.getViewportHeight() * 0.32);
   },
 
+  get isUiBubbleBelowHead() {
+    return this.isHistoryBelow;
+  },
+
   get expandIcon() {
     return this.isDockedRight ? "chevron_left" : "chevron_right";
   },
@@ -542,6 +578,130 @@ const model = {
     } catch (error) {
       this.status = error.message;
     }
+  },
+
+  clearInteractionHintTimer() {
+    this.interactionHintTimer = clearTimer(this.interactionHintTimer);
+  },
+
+  clearUiBubbleEnterTimer() {
+    this.uiBubbleEnterTimer = clearTimer(this.uiBubbleEnterTimer);
+  },
+
+  clearUiBubbleAutoHideTimer() {
+    this.uiBubbleAutoHideTimer = clearTimer(this.uiBubbleAutoHideTimer);
+  },
+
+  clearUiBubbleExitTimer() {
+    this.uiBubbleExitTimer = clearTimer(this.uiBubbleExitTimer);
+  },
+
+  recordInteraction(options = {}) {
+    this.hasInteracted = true;
+    this.clearInteractionHintTimer();
+
+    if (options.hideBubble !== false) {
+      this.dismissUiBubble({
+        clearQueue: options.clearBubbleQueue !== false
+      });
+    }
+  },
+
+  scheduleInteractionHint() {
+    this.clearInteractionHintTimer();
+
+    if (this.hasInteracted) {
+      return;
+    }
+
+    this.interactionHintTimer = window.setTimeout(() => {
+      this.interactionHintTimer = 0;
+
+      if (this.hasInteracted || !this.isCollapsed || this.dragState?.moved === true) {
+        return;
+      }
+
+      this.showUiBubble(IDLE_HINT_BUBBLE_TEXT, AGENT_IDLE_HINT_HIDE_DELAY_MS);
+    }, AGENT_IDLE_HINT_DELAY_MS);
+  },
+
+  showUiBubble(text, hideAfterMs = 0) {
+    const normalizedText = typeof text === "string" ? text.trim() : "";
+
+    if (!normalizedText) {
+      this.dismissUiBubble({
+        clearQueue: true
+      });
+      return;
+    }
+
+    this.nextUiBubble = {
+      hideAfterMs: normalizeUiBubbleHideDelay(hideAfterMs),
+      text: normalizedText
+    };
+    this.flushUiBubbleQueue();
+  },
+
+  flushUiBubbleQueue() {
+    if (this.uiBubblePhase === "leaving") {
+      return;
+    }
+
+    if (this.isUiBubbleMounted) {
+      this.dismissUiBubble();
+      return;
+    }
+
+    const nextUiBubble = this.nextUiBubble;
+
+    if (!nextUiBubble) {
+      return;
+    }
+
+    this.nextUiBubble = null;
+    this.clearUiBubbleExitTimer();
+    this.clearUiBubbleEnterTimer();
+    this.clearUiBubbleAutoHideTimer();
+    this.uiBubbleText = nextUiBubble.text;
+    this.isUiBubbleMounted = true;
+    this.uiBubblePhase = "entering";
+    this.uiBubbleEnterTimer = window.setTimeout(() => {
+      this.uiBubbleEnterTimer = 0;
+
+      if (!this.isUiBubbleMounted || this.uiBubblePhase !== "entering") {
+        return;
+      }
+
+      this.uiBubblePhase = "visible";
+    }, UI_BUBBLE_ENTER_DURATION_MS);
+
+    if (nextUiBubble.hideAfterMs > 0) {
+      this.uiBubbleAutoHideTimer = window.setTimeout(() => {
+        this.uiBubbleAutoHideTimer = 0;
+        this.dismissUiBubble();
+      }, UI_BUBBLE_ENTER_DURATION_MS + nextUiBubble.hideAfterMs);
+    }
+  },
+
+  dismissUiBubble(options = {}) {
+    if (options.clearQueue === true) {
+      this.nextUiBubble = null;
+    }
+
+    if (!this.isUiBubbleMounted || this.uiBubblePhase === "leaving") {
+      return;
+    }
+
+    this.clearUiBubbleEnterTimer();
+    this.clearUiBubbleAutoHideTimer();
+    this.uiBubblePhase = "leaving";
+    this.uiBubbleExitTimer = window.setTimeout(() => {
+      this.uiBubbleExitTimer = 0;
+      this.isUiBubbleMounted = false;
+      this.uiBubblePhase = "";
+      this.uiBubbleText = "";
+      this.flushUiBubbleQueue();
+    }, UI_BUBBLE_EXIT_DURATION_MS);
   },
 
   syncCurrentChatRuntime() {
@@ -642,6 +802,7 @@ const model = {
           storage.loadOnscreenAgentConfig(),
           storage.loadOnscreenAgentHistory()
         ]);
+        const shouldPersistBootCollapse = storedConfig.isCollapsed !== true;
 
         this.settings = {
           ...storedConfig.settings
@@ -653,7 +814,7 @@ const model = {
         this.systemPromptDraft = storedConfig.systemPrompt;
         this.agentX = storedConfig.agentX;
         this.agentY = storedConfig.agentY;
-        this.isCollapsed = storedConfig.isCollapsed === true;
+        this.isCollapsed = true;
         this.replaceHistory(storedHistory.map((message) => normalizeStoredMessage(message)));
         this.ensurePosition();
 
@@ -673,6 +834,11 @@ const model = {
         this.isInitialized = true;
         this.status = "Ready.";
         this.render();
+
+        if (shouldPersistBootCollapse) {
+          this.scheduleConfigPersist();
+        }
+
         this.focusInput();
       } catch (error) {
         this.status = error.message;
@@ -723,6 +889,7 @@ const model = {
 
     this.ensurePosition();
     this.render();
+    this.scheduleInteractionHint();
     void this.init();
   },
 
@@ -744,6 +911,14 @@ const model = {
   unmount() {
     this.cleanupDrag();
     this.cancelStreamingMessageRender();
+    this.clearInteractionHintTimer();
+    this.clearUiBubbleEnterTimer();
+    this.clearUiBubbleAutoHideTimer();
+    this.clearUiBubbleExitTimer();
+    this.nextUiBubble = null;
+    this.isUiBubbleMounted = false;
+    this.uiBubblePhase = "";
+    this.uiBubbleText = "";
 
     if (this.configPersistTimer) {
       window.clearTimeout(this.configPersistTimer);
@@ -770,6 +945,8 @@ const model = {
     if (event.button !== 0) {
       return;
     }
+
+    this.recordInteraction();
 
     const target = event.currentTarget;
 
@@ -833,6 +1010,9 @@ const model = {
   toggleCollapsed() {
     this.isCollapsed = !this.isCollapsed;
     this.scheduleConfigPersist();
+    this.dismissUiBubble({
+      clearQueue: true
+    });
     this.render({
       preserveScroll: true
     });
@@ -843,6 +1023,8 @@ const model = {
   },
 
   expand() {
+    this.recordInteraction();
+
     if (!this.isCollapsed) {
       this.focusInput();
       return;
@@ -850,6 +1032,9 @@ const model = {
 
     this.isCollapsed = false;
     this.scheduleConfigPersist();
+    this.dismissUiBubble({
+      clearQueue: true
+    });
     this.render({
       preserveScroll: true
     });

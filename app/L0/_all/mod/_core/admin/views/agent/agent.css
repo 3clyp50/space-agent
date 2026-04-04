@@ -25,6 +25,8 @@
   --space-field-border: var(--admin-border);
   --space-field-focus-border: var(--admin-border-strong);
   --space-option-hover-bg: rgba(19, 32, 51, 0.94);
+  --space-composer-attachment-border: var(--admin-border);
+  --space-composer-attachment-bg: rgba(18, 29, 51, 0.62);
   --agent-thread-gap: 18px;
   --agent-thread-bubble-gap: 14px;
   --agent-thread-user-bubble-max-width: min(calc(100% - 46px), 44rem);
@@ -101,6 +103,7 @@
 
 .secondary-button,
 .primary-button,
+.confirm-button,
 .execution-detail-button {
   min-height: 34px;
   padding: 0.5rem 0.85rem;
@@ -108,15 +111,12 @@
   border-radius: 10px;
 }
 
-.secondary-button,
-.execution-detail-button {
+.secondary-button {
   background: transparent;
 }
 
 .secondary-button:hover:not(:disabled),
-.secondary-button:focus-visible:not(:disabled),
-.execution-detail-button:hover:not(:disabled),
-.execution-detail-button:focus-visible:not(:disabled) {
+.secondary-button:focus-visible:not(:disabled) {
   background: rgba(19, 32, 51, 0.94);
 }
 
@@ -125,7 +125,7 @@
   color: var(--color-danger);
 }
 
-.primary-button {
+.admin-agent-send-button {
   color: var(--color-accent-primary);
 }
 
@@ -321,12 +321,37 @@
   line-height: 1.6;
 }
 
+.composer-attachments {
+  margin-top: 10px;
+}
+
 .chat-composer-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   margin-top: 10px;
+}
+
+.admin-agent-composer-buttons {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.admin-agent-attach-button,
+.admin-agent-send-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.admin-agent-send-button.is-stop x-icon {
+  font-variation-settings: "FILL" 1;
+}
+
+.admin-agent-send-button.is-busy x-icon {
+  animation: agent-thread-spin 0.9s linear infinite;
 }
 
 .composer-hint {
@@ -342,6 +367,10 @@
 
   .chat-option {
     width: 100%;
+  }
+
+  .composer-attachments {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .message-row.user .message-bubble {

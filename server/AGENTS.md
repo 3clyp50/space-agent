@@ -40,7 +40,7 @@ Current server layout:
 - `server/lib/auth/`: password verifier, session, user file, and auth service helpers
 - `server/lib/utils/`: shared low-level utilities such as app-path normalization, lightweight YAML helpers, and project `.env` file parsing and update helpers used by the CLI-managed server config flow
 - `server/lib/customware/`: layout parsing, group index building, and module inheritance resolution
-- `server/lib/customware/file_access.js`: reusable normalized app-path permission checks plus index-backed `file_read`, `file_write`, `file_delete`, `file_list`, and pattern-based `file_paths` helper operations, including `~` path expansion for authenticated user-relative list, read, write, and delete paths plus fail-fast batch validation for multi-path reads, writes, and deletes
+- `server/lib/customware/file_access.js`: reusable normalized app-path permission checks plus index-backed `file_read`, `file_write`, `file_delete`, `file_copy`, `file_move`, `file_info`, `file_list`, and pattern-based `file_paths` helper operations, including `~` path expansion for authenticated user-relative list, read, write, delete, copy, move, and info paths plus fail-fast batch validation for multi-path reads, writes, deletes, copies, and moves
 - `server/lib/customware/module_manage.js`: shared module-installer helpers that validate writable module-root paths, inspect accessible overrides through `path_index` plus `group_index`, and manage Git-backed installs or updates under `app/L1` and `app/L2`
 - `server/lib/file_watch/config.yaml`: declarative watched-file handler configuration
 - `server/lib/file_watch/handlers/`: watchdog handler classes such as `path_index`, `group_index`, and `user_index`, loaded by name from config
@@ -63,7 +63,7 @@ Current server layout:
 - only explicit public endpoints related to authentication or health may run without authentication; other APIs and `/mod/...` fetches must require a valid session
 - root page shells are pretty-routed as `/`, `/login`, and `/admin`; legacy `.html` requests redirect to those routes
 - page-shell assets keep their explicit `/pages/res/...` paths and are not pretty-routed
-- app filesystem APIs use app-rooted paths like `L2/alice/user.yaml` or `/app/L2/alice/user.yaml`; `file_read`, `file_write`, `file_delete`, and `file_list` also accept `~` or `~/...` for the authenticated user's `L2/<username>/...`; `file_read` plus `file_write` accept either single-file input or a top-level `files` batch; `file_delete` accepts either single-path input or a top-level `paths` batch; and `file_write` creates directories when the target path ends with `/`
+- app filesystem APIs use app-rooted paths like `L2/alice/user.yaml` or `/app/L2/alice/user.yaml`; `file_read`, `file_write`, `file_delete`, `file_copy`, `file_move`, `file_info`, and `file_list` also accept `~` or `~/...` for the authenticated user's `L2/<username>/...`; `file_read` plus `file_write` accept either single-file input or a top-level `files` batch; `file_delete` accepts either single-path input or a top-level `paths` batch; `file_copy` plus `file_move` accept either one `{ fromPath, toPath }` pair or a top-level `entries` batch; `file_info` accepts a single readable path and returns metadata for one file or folder; and `file_write` creates directories when the target path ends with `/`
 - read permissions are: own `L2/<username>/`, plus `L0/<group>/` and `L1/<group>/` for groups the user belongs to
 - write permissions are: own `L2/<username>/`; managed `L1/<group>/`; `_admin` members may write any `L1/` and `L2/`; nobody writes `L0/`
 - watchdog infrastructure is config-driven
@@ -80,8 +80,8 @@ Current server layout:
 - `server/lib/customware/file_access.js` is the canonical shared entry point for authenticated app file access and path listing used by API endpoints or other server-side agent-facing flows
 - `listAppPaths()` is the required implementation path for `file_list`-style behavior; it resolves existing targets from `path_index`, applies readable-scope checks with the authenticated username plus `group_index`, and returns deterministic sorted app-rooted paths
 - `listAppPathsByPatterns()` is the required implementation path for `file_paths`-style hierarchy lookups; it scans `path_index` through the authenticated user's readable `L0 -> L1 -> L2` owner roots, matches owner-relative glob patterns, and returns full app-relative paths grouped by the requested pattern strings
-- `readAppFile()`, `readAppFiles()`, `writeAppFile()`, `writeAppFiles()`, `deleteAppPath()`, and `deleteAppPaths()` share the same normalization and permission model; when a new endpoint needs app-file reads, writes, or deletes, extend these helpers centrally instead of duplicating path parsing or access rules inside the endpoint
-- batch file reads, writes, and deletes must validate every target, encoding, and permission decision before any disk work begins; batch writes or deletes should fail before mutating anything when one entry is invalid or unauthorized
+- `readAppFile()`, `readAppFiles()`, `writeAppFile()`, `writeAppFiles()`, `deleteAppPath()`, `deleteAppPaths()`, `copyAppPath()`, `copyAppPaths()`, `moveAppPath()`, `moveAppPaths()`, and `getAppPathInfo()` share the same normalization and permission model; when a new endpoint needs app-file reads, writes, deletes, copies, moves, or metadata, extend these helpers centrally instead of duplicating path parsing or access rules inside the endpoint
+- batch file reads, writes, deletes, copies, and moves must validate every target, encoding, and permission decision before any disk work begins; batch writes, deletes, copies, or moves should fail before mutating anything when one entry is invalid or unauthorized
 - do not add ad hoc filesystem walks for app path discovery in API handlers when `path_index` can answer the question; keep file-list operations index-backed so agent-oriented listing stays efficient as the tree grows
 - do not derive group or user access state inside each endpoint; request identity comes from the router/auth flow backed by `user_index`, and reusable access decisions should combine that username with `group_index`
 - after writes that can affect file existence, group membership, or user/session/auth state, refresh the watchdog so `path_index`, `group_index`, and `user_index` stay synchronized with disk
@@ -118,7 +118,10 @@ Current endpoint set:
 
 - `extensions_load`
 - `file_list`
+- `file_copy`
 - `file_delete`
+- `file_info`
+- `file_move`
 - `file_paths`
 - `file_read`
 - `file_write`
@@ -138,13 +141,15 @@ Current status notes:
 
 - `guest_create`, `login`, `login_challenge`, and `login_check` are the current public auth-related endpoints
 - `guest_create` creates a guest L2 user, refreshes the relevant indexes, and leaves authentication to the standard session flow
-- `file_read`, `file_write`, `file_delete`, and `file_list` are the current authenticated app-filesystem APIs; they operate on app-rooted paths through the shared `file_access` library, use watchdog-backed indexes for path resolution and permission decisions, and should remain the reusable contract for agent-oriented file access
-- `file_read` accepts `GET` query-style single-file reads and `POST` body-based single or batch reads; `file_write` accepts `POST` body-based single or batch writes; `file_delete` accepts `DELETE` or `POST` for single-path deletes and `POST` for batch deletes
-- `file_read`, `file_write`, and `file_delete` expand `~` or `~/...` to the authenticated user's `L2/<username>/...` path before normal app-path validation and permission checks
+- `file_read`, `file_write`, `file_delete`, `file_copy`, `file_move`, `file_info`, and `file_list` are the current authenticated app-filesystem APIs; they operate on app-rooted paths through the shared `file_access` library, use watchdog-backed indexes for path resolution and permission decisions, and should remain the reusable contract for agent-oriented file access
+- `file_read` accepts `GET` query-style single-file reads and `POST` body-based single or batch reads; `file_info` accepts `GET` query-style single-path metadata reads plus `POST` body-based single-path metadata reads; `file_write`, `file_copy`, and `file_move` accept `POST` body-based single or batch requests; `file_delete` accepts `DELETE` or `POST` for single-path deletes and `POST` for batch deletes
+- `file_read`, `file_write`, `file_delete`, `file_copy`, `file_move`, and `file_info` expand `~` or `~/...` to the authenticated user's `L2/<username>/...` path before normal app-path validation and permission checks
 - `file_write` creates directories when the target path ends with `/`; directory writes ignore encoding and do not accept non-empty content
 - `file_delete` deletes files or directories, and directory deletes are recursive
-- batch `file_read` returns `{ count, files }`; batch `file_write` returns `{ count, bytesWritten, files }`; batch `file_delete` returns `{ count, paths }`
-- batch `file_read`, `file_write`, and `file_delete` precheck all requested targets up front and fail fast if any target is invalid, missing, unauthorized, duplicated, or overlapping
+- `file_copy` copies readable files or directories into writable destinations without overwriting existing paths, while `file_move` moves or renames writable files or directories into writable destinations without overwriting existing paths; both require the destination parent directory to already exist, reject file-vs-directory name collisions such as `foo` vs `foo/`, and reject descendant or overlapping batch moves that would make the result ambiguous
+- `file_info` returns metadata for one readable file or folder, currently including `path`, `isDirectory`, `size`, and ISO `modifiedAt`, and is the right preflight contract when the frontend needs metadata such as edit-size limits without loading the full file body first
+- batch `file_read` returns `{ count, files }`; batch `file_write` returns `{ count, bytesWritten, files }`; batch `file_delete` returns `{ count, paths }`; and batch `file_copy` plus `file_move` return `{ count, entries }`
+- batch `file_read`, `file_write`, `file_delete`, `file_copy`, and `file_move` precheck all requested targets up front and fail fast if any target is invalid, missing, unauthorized, duplicated, or overlapping
 - `file_paths` is the authenticated hierarchy-pattern lookup API; it matches owner-relative glob patterns such as `skills/SKILL.md` across the user's readable `L0`, `L1`, and `L2` roots and returns matched full paths relative to `/app`, while preserving hierarchy order and allowing directory patterns that end with `/`
 - `password_generate` is an authenticated utility endpoint that accepts a JSON body with `password` as a string and returns the raw SCRAM verifier object exactly as it would be written to `app/L2/<username>/meta/password.json`
 - `module_info` is the authenticated `GET` endpoint that accepts a module request path such as `/mod/acme/demo` or a concrete app path and returns the accessible override locations plus per-location Git info; it now includes locations the caller can reach through either read or write permission, and `_admin` callers may opt into other users' `L2` locations through `includeOtherUsers` and `ownerId`
@@ -157,12 +162,12 @@ Current status notes:
 - public shell artwork or other shell-local binaries should live under `server/pages/res/` and load through `/pages/res/...` rather than being inlined into large data URIs in HTML
 - page shells under `server/pages/` should stay minimal and expose stable extension anchors when the frontend runtime should compose content dynamically; do not hardwire module components there when the `mod/**/ext/**` loader can own the composition instead
 - public page shells such as `/login` should not depend on authenticated `/mod/...` assets; keep any pre-auth shell styling or assets local and aligned with `/app/AGENTS.md`
-- `server/pages/login.html` now keeps only login-specific layout, copy, auth flow, and intro-float tuning in the local `TITLE_FLOAT_PARAMS`, `ASTRONAUT_FLOAT_PARAMS`, and nearby float-profile objects; the public backdrop is mirrored from the shared app canvas into `server/pages/res/space-backdrop.css` and `server/pages/res/space-backdrop.js` so the login shell can keep its animated star-drift plus shooting-star version, fixed cropped scene, and browser-zoom compensation without depending on authenticated `/mod/...` assets
+- `server/pages/login.html` now keeps only login-specific layout, copy, auth flow, and intro-float tuning in the local `TITLE_FLOAT_PARAMS`, `ASTRONAUT_FLOAT_PARAMS`, `ASTRONAUT_FLOAT_VARIANT`, and nearby float-profile objects; the public backdrop is mirrored from the shared app canvas into `server/pages/res/space-backdrop.css` and `server/pages/res/space-backdrop.js` so the login shell can keep its animated star-drift plus shooting-star version, fixed cropped scene, and browser-zoom compensation without depending on authenticated `/mod/...` assets
 - `/admin` declares `space-max-layer=0`, and server-side module resolution honors that ceiling through explicit `maxLayer` request data plus admin-origin request fallback for browser-native `/mod/...` loads
 - `extensions_load` resolves extension files from layered `mod/**/ext/**` paths using the current user's group inheritance and exact module-path overrides
 - `extensions_load` accepts a top-level `maxLayer` integer in the request body, defaults to `2`, and applies that ceiling before extension override selection
 - `extensions_load` also accepts grouped request batches so the frontend can debounce uncached extension discovery to one request per frame while the server resolves all requested pattern groups in one inheritance pass
-- `maxLayer` only constrains module and extension resolution; app file APIs such as `file_read`, `file_write`, `file_delete`, and `file_list` continue to use their normal permission model across writable layers
+- `maxLayer` only constrains module and extension resolution; app file APIs such as `file_read`, `file_write`, `file_delete`, `file_copy`, `file_move`, `file_info`, and `file_list` continue to use their normal permission model across writable layers
 
 ## Server Implementation Guide
 

@@ -20,6 +20,24 @@
           x-destroy="$store.onscreenAgent.unmount()"
         >
           <div class="onscreen-agent-cluster">
+            <div
+              class="onscreen-agent-ui-bubble"
+              x-show="$store.onscreenAgent.isUiBubbleMounted"
+              :class="{
+                'is-left': $store.onscreenAgent.isDockedRight,
+                'is-right': !$store.onscreenAgent.isDockedRight,
+                'is-above': !$store.onscreenAgent.isUiBubbleBelowHead,
+                'is-below': $store.onscreenAgent.isUiBubbleBelowHead,
+                'is-entering': $store.onscreenAgent.uiBubblePhase === 'entering',
+                'is-visible': $store.onscreenAgent.uiBubblePhase === 'visible',
+                'is-leaving': $store.onscreenAgent.uiBubblePhase === 'leaving'
+              }"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              <span class="onscreen-agent-ui-bubble-text" x-text="$store.onscreenAgent.uiBubbleText"></span>
+            </div>
             <button
               type="button"
               class="onscreen-agent-avatar-button"
@@ -236,7 +254,7 @@
                       Defaults
                     </button>
                     <button type="button" class="secondary-button" @click="$store.onscreenAgent.closeSettingsDialog()">Cancel</button>
-                    <button type="submit" class="primary-button">Save Settings</button>
+                    <button type="submit" class="confirm-button">Save Settings</button>
                   </div>
                 </form>
               </dialog>

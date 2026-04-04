@@ -572,6 +572,7 @@
       const LOGIN_PREFIX = "space-login-v1";
       const CLIENT_KEY_LABEL = "Client Key";
       const SERVER_KEY_LABEL = "Server Key";
+      const TAU = Math.PI * 2;
       // Tune the title and astronaut independently here when the login shell motion needs retuning.
       const TITLE_FLOAT_PARAMS = Object.freeze({
         movementDistance: 1.5,
@@ -579,12 +580,20 @@
         rotationDistance: 1.5,
         rotationSpeed: 1.5
       });
+      // Change this one float to shift the astronaut's starting pose, drift direction, and pace.
+      const ASTRONAUT_FLOAT_VARIANT = 0.5;
       const ASTRONAUT_FLOAT_PARAMS = Object.freeze({
         movementDistance: 3,
         movementSpeed: 0.9,
         rotationDistance: 0.6,
         rotationSpeed: 0.45
       });
+      const astronautOrbitOffsetTurns = positiveModulo(ASTRONAUT_FLOAT_VARIANT, 1);
+      const astronautRotationOffsetTurns = positiveModulo(ASTRONAUT_FLOAT_VARIANT * 1.61803398875, 1);
+      const astronautOrbitDirection = positiveModulo(ASTRONAUT_FLOAT_VARIANT, 2) < 1 ? 1 : -1;
+      const astronautRotationDirection =
+        positiveModulo(ASTRONAUT_FLOAT_VARIANT * 0.73, 2) < 1 ? 1 : -1;
+      const astronautSpeedMultiplier = 0.82 + (positiveModulo(ASTRONAUT_FLOAT_VARIANT * 2.37, 1) * 0.56);
       const TITLE_FLOAT_PROFILE = buildFloatProfile(
         Object.freeze({
           orbitPeriodMs: 11800,
@@ -605,7 +614,11 @@
           xRadius: 7.2,
           yRadius: 8.2
         }),
-        ASTRONAUT_FLOAT_PARAMS
+        Object.freeze({
+          ...ASTRONAUT_FLOAT_PARAMS,
+          movementSpeed: ASTRONAUT_FLOAT_PARAMS.movementSpeed * astronautSpeedMultiplier,
+          rotationSpeed: ASTRONAUT_FLOAT_PARAMS.rotationSpeed * astronautSpeedMultiplier
+        })
       );
       const textEncoder = new TextEncoder();
       const form = document.getElementById("login-form");
@@ -664,6 +677,10 @@
         return durationMs / Math.max(speedMultiplier, 0.01);
       }
 
+      function positiveModulo(value, divisor) {
+        return ((value % divisor) + divisor) % divisor;
+      }
+
       function buildFloatProfile(baseProfile, params) {
         const rotationMaxDeg =
           baseProfile.rotationLimitEnabled === false
@@ -693,9 +710,11 @@
         Object.freeze({
           applyPose: setAstronautPose,
           element: introAstronaut,
-          orbitPhase: 2.05,
+          orbitDirection: astronautOrbitDirection,
+          orbitPhase: 2.05 + (astronautOrbitOffsetTurns * TAU),
           profile: ASTRONAUT_FLOAT_PROFILE,
-          rotationPhase: 0.35
+          rotationDirection: astronautRotationDirection,
+          rotationPhase: 0.35 + (astronautRotationOffsetTurns * TAU)
         })
       ];
 
@@ -710,9 +729,12 @@
           return;
         }
 
-        const orbitAngle = ((elapsed / target.profile.orbitPeriodMs) * Math.PI * 2) + target.orbitPhase;
+        const orbitAngle =
+          ((elapsed / target.profile.orbitPeriodMs) * TAU * (target.orbitDirection ?? 1)) +
+          target.orbitPhase;
         const rotationAngle =
-          ((elapsed / target.profile.rotationPeriodMs) * Math.PI * 2) + target.rotationPhase;
+          ((elapsed / target.profile.rotationPeriodMs) * TAU * (target.rotationDirection ?? 1)) +
+          target.rotationPhase;
 
         target.applyPose(
           Math.cos(orbitAngle) * target.profile.xRadius,

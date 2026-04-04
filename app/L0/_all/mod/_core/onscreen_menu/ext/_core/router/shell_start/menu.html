@@ -1,7 +1,23 @@
 <link rel="stylesheet" href="/mod/_core/onscreen_menu/onscreen-menu.css" />
 
 <div
-  x-data="{ isOpen: false }"
+  x-data="{
+    isOpen: false,
+    navigateTop(targetUrl) {
+      try {
+        window.top.location.assign(targetUrl);
+      } catch {
+        window.location.assign(targetUrl);
+      }
+    },
+    openAdmin() {
+      const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}` || '/index.html';
+      const adminUrl = new URL('/admin', window.location.href);
+      adminUrl.searchParams.set('url', currentUrl);
+      this.isOpen = false;
+      this.navigateTop(adminUrl.href);
+    }
+  }"
   class="onscreen-menu"
   @click.outside="isOpen = false"
   @keydown.escape.window="isOpen = false"
@@ -35,7 +51,7 @@
         type="button"
         class="space-topbar-menu-action"
         role="menuitem"
-        @click="isOpen = false; try { window.top.location.assign('/admin') } catch(e) { window.location.assign('/admin') }"
+        @click="openAdmin()"
       >
         <x-icon>admin_panel_settings</x-icon>
         <span class="space-topbar-menu-action-label">Admin</span>

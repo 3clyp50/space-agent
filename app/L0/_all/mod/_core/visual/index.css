@@ -1,4 +1,5 @@
 @import "./canvas/space-canvas.css";
+@import "./chrome/popover.css";
 @import "./chrome/topbar.css";
 @import "./actions/buttons.css";
 @import "./forms/dialog.css";

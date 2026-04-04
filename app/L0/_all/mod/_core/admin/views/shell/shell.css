@@ -204,6 +204,11 @@ html[data-layout="vertical"] .divider-handle {
   gap: 0;
 }
 
+.admin-tab-button:not(.is-active) {
+  width: 52px;
+  padding: 0;
+}
+
 .admin-tab-avatar {
   display: block;
   width: 32px;
@@ -213,27 +218,17 @@ html[data-layout="vertical"] .divider-handle {
 }
 
 .admin-tab-label {
-  max-width: 0;
-  overflow: hidden;
+  display: none;
   color: inherit;
   font-size: 0.86rem;
   font-weight: 600;
   letter-spacing: 0.01em;
   white-space: nowrap;
-  opacity: 0;
-  transform: translateX(-4px);
-  transition:
-    max-width 160ms ease,
-    opacity 120ms ease,
-    transform 160ms ease,
-    margin-left 160ms ease;
 }
 
 .admin-tab-button.is-active .admin-tab-label {
-  max-width: 12rem;
+  display: block;
   margin-left: 8px;
-  opacity: 1;
-  transform: translateX(0);
 }
 
 .admin-stage {
@@ -259,13 +254,20 @@ html[data-layout="vertical"] .divider-handle {
   overflow: hidden;
 }
 
+.admin-panel-shell-files {
+  display: flex;
+  width: 100%;
+  overflow: hidden;
+}
+
 .admin-panel-shell > x-component {
   display: block;
   width: 100%;
   min-width: 0;
 }
 
-.admin-panel-shell-agent > x-component {
+.admin-panel-shell-agent > x-component,
+.admin-panel-shell-files > x-component {
   display: flex;
   flex: 1 1 auto;
   width: 100%;

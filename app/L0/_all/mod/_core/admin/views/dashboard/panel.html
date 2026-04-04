@@ -20,5 +20,10 @@
         <span x-text="action.label"></span>
       </button>
     </template>
+
+    <button class="admin-launch-card" type="button" @click="$store.adminShell.leaveAdminArea()">
+      <x-icon>exit_to_app</x-icon>
+      <span>Leave admin area</span>
+    </button>
   </div>
 </section>

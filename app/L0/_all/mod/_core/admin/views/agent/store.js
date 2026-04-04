@@ -8,9 +8,46 @@ import * as storage from "/mod/_core/admin/views/agent/storage.js";
 import * as agentView from "/mod/_core/admin/views/agent/view.js";
 import { closeDialog, openDialog } from "/mod/_core/visual/forms/dialog.js";
 import { countTextTokens } from "/mod/_core/framework/js/token-count.js";
+import {
+  createAttachmentRuntime,
+  createDraftAttachments,
+  normalizeStoredAttachment,
+  serializeAttachmentMetadata
+} from "/mod/_core/admin/views/agent/attachments.js";
+
+function getRuntime() {
+  const runtime = globalThis.space;
+
+  if (!runtime || typeof runtime !== "object") {
+    throw new Error("Space runtime is not available.");
+  }
+
+  if (!runtime.fw || typeof runtime.fw.createStore !== "function") {
+    throw new Error("space.fw.createStore is not available.");
+  }
+
+  return runtime;
+}
+
+function ensureCurrentChatRuntime(targetRuntime) {
+  if (!targetRuntime.currentChat || typeof targetRuntime.currentChat !== "object") {
+    targetRuntime.currentChat = {};
+  }
+
+  if (!Array.isArray(targetRuntime.currentChat.messages)) {
+    targetRuntime.currentChat.messages = [];
+  }
+
+  if (!targetRuntime.currentChat.attachments || typeof targetRuntime.currentChat.attachments !== "object") {
+    targetRuntime.currentChat.attachments = createAttachmentRuntime();
+  }
+
+  return targetRuntime.currentChat;
+}
 
 function createMessage(role, content, options = {}) {
   return {
+    attachments: Array.isArray(options.attachments) ? options.attachments.slice() : [],
     content,
     id: `${role}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
     kind: typeof options.kind === "string" ? options.kind : "",
@@ -25,10 +62,29 @@ function createStreamingAssistantMessage() {
   };
 }
 
+function createRuntimeMessageSnapshot(message) {
+  return {
+    attachments: Array.isArray(message?.attachments)
+      ? message.attachments.map((attachment) => serializeAttachmentMetadata(attachment))
+      : [],
+    content: typeof message?.content === "string" ? message.content : "",
+    id: typeof message?.id === "string" ? message.id : "",
+    kind: typeof message?.kind === "string" ? message.kind : "",
+    role: message?.role === "assistant" ? "assistant" : "user",
+    streaming: message?.streaming === true
+  };
+}
+
 function normalizeStoredMessage(message) {
   return {
+    attachments: Array.isArray(message?.attachments)
+      ? message.attachments.map((attachment) => normalizeStoredAttachment(attachment))
+      : [],
     content: typeof message?.content === "string" ? message.content : "",
-    id: typeof message?.id === "string" ? message.id : `${message?.role || "message"}-${Date.now()}`,
+    id:
+      typeof message?.id === "string" && message.id
+        ? message.id
+        : `${message?.role || "message"}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
     kind: typeof message?.kind === "string" ? message.kind : "",
     role: message?.role === "assistant" ? "assistant" : "user",
     streaming: message?.streaming === true
@@ -115,9 +171,16 @@ function buildEmptyAssistantRetryMessage() {
   return "protocol correction: empty response, continue executing or respond if done";
 }
 
+function isAbortError(error) {
+  return Boolean(error && (error.name === "AbortError" || error.code === 20));
+}
+
 const model = {
+  activeRequestController: null,
+  currentChatRuntime: null,
   defaultSystemPrompt: "",
   draft: "",
+  draftAttachments: [],
   executionContext: null,
   executionOutputOverrides: Object.create(null),
   history: [],
@@ -130,13 +193,16 @@ const model = {
   isLoadingDefaultSystemPrompt: false,
   isSending: false,
   pendingHistorySnapshot: null,
+  pendingStreamingMessage: null,
   promptHistoryText: "",
   promptHistoryMessages: [],
   promptHistoryMode: "text",
   promptHistoryTitle: "Prompt History",
+  queuedSubmissions: [],
   rawOutputContent: "",
   rawOutputTitle: "Raw LLM Output",
   refs: {
+    attachmentInput: null,
     historyDialog: null,
     input: null,
     rawDialog: null,
@@ -146,6 +212,7 @@ const model = {
     thread: null
   },
   rerunningMessageId: "",
+  runtime: null,
   settings: {
     apiEndpoint: "",
     apiKey: "",
@@ -161,6 +228,8 @@ const model = {
     paramsText: ""
   },
   status: "Loading admin agent...",
+  stopRequested: false,
+  streamingRenderFrame: 0,
   systemPrompt: "",
   systemPromptDraft: "",
   runtimeSystemPrompt: "",
@@ -179,12 +248,45 @@ const model = {
     return !this.isInitialized || this.isCompactingHistory;
   },
 
+  get hasDraftSubmission() {
+    return Boolean(this.draft.trim() || this.draftAttachments.length);
+  },
+
+  get hasQueuedSubmission() {
+    return this.queuedSubmissions.length > 0;
+  },
+
+  get queuedSubmissionCount() {
+    return this.queuedSubmissions.length;
+  },
+
+  get canQueueSubmissionWhileBusy() {
+    return (
+      this.isSending &&
+      !this.isLoadingDefaultSystemPrompt &&
+      !this.isCompactingHistory &&
+      this.hasDraftSubmission
+    );
+  },
+
   get isComposerSubmitDisabled() {
-    return !this.isInitialized || this.isSending || this.isLoadingDefaultSystemPrompt || this.isCompactingHistory || !this.draft.trim();
+    return (
+      !this.isInitialized ||
+      this.isLoadingDefaultSystemPrompt ||
+      this.isCompactingHistory ||
+      (!this.isSending && !this.hasDraftSubmission) ||
+      (this.isSending && !this.canQueueSubmissionWhileBusy)
+    );
   },
 
   get isCompactDisabled() {
-    return !this.isInitialized || this.isSending || this.isLoadingDefaultSystemPrompt || !this.historyText.trim();
+    return (
+      !this.isInitialized ||
+      this.isSending ||
+      this.isLoadingDefaultSystemPrompt ||
+      this.isCompactingHistory ||
+      !this.historyText.trim()
+    );
   },
 
   get llmSummary() {
@@ -197,6 +299,84 @@ const model = {
 
   get historyTokenSummary() {
     return `${config.formatAdminChatTokenCount(this.historyTokenCount)} tokens`;
+  },
+
+  get isAttachmentPickerDisabled() {
+    return !this.isInitialized || this.isLoadingDefaultSystemPrompt || this.isCompactingHistory;
+  },
+
+  get isPrimaryActionDisabled() {
+    if (!this.isInitialized || this.isLoadingDefaultSystemPrompt || this.isCompactingHistory) {
+      return true;
+    }
+
+    if (!this.isSending) {
+      return !this.hasDraftSubmission;
+    }
+
+    if (this.canQueueSubmissionWhileBusy) {
+      return false;
+    }
+
+    return this.hasQueuedSubmission;
+  },
+
+  get primaryActionIcon() {
+    if (this.isSending) {
+      if (this.canQueueSubmissionWhileBusy) {
+        return "arrow_upward";
+      }
+
+      if (this.hasQueuedSubmission) {
+        return "progress_activity";
+      }
+
+      return "stop";
+    }
+
+    return "arrow_upward";
+  },
+
+  get primaryActionLabel() {
+    if (this.isSending) {
+      if (this.canQueueSubmissionWhileBusy) {
+        return this.hasQueuedSubmission ? "Add message to queue" : "Queue message for next step";
+      }
+
+      if (this.hasQueuedSubmission) {
+        return this.queuedSubmissionCount === 1
+          ? "1 message queued for next step"
+          : `${this.queuedSubmissionCount} messages queued for next steps`;
+      }
+
+      return "Stop current loop";
+    }
+
+    return "Send message";
+  },
+
+  get primaryActionButtonText() {
+    if (this.isSending) {
+      if (this.canQueueSubmissionWhileBusy) {
+        return "Queue";
+      }
+
+      if (this.hasQueuedSubmission) {
+        return this.queuedSubmissionCount === 1 ? "Queued 1" : `Queued ${this.queuedSubmissionCount}`;
+      }
+
+      return "Stop";
+    }
+
+    return "Send";
+  },
+
+  get isPrimaryActionBusy() {
+    return this.isSending && this.hasQueuedSubmission && !this.canQueueSubmissionWhileBusy;
+  },
+
+  get isPrimaryActionStop() {
+    return this.isSending && !this.hasQueuedSubmission && !this.canQueueSubmissionWhileBusy;
   },
 
   get compactButtonIcon() {
@@ -231,9 +411,12 @@ const model = {
     }
 
     this.initializationPromise = (async () => {
+      this.runtime = getRuntime();
+      this.currentChatRuntime = ensureCurrentChatRuntime(this.runtime);
       this.executionContext = execution.createExecutionContext({
         targetWindow: window
       });
+      this.syncCurrentChatRuntime();
       skills.installAdminSkillRuntime();
 
       try {
@@ -277,6 +460,7 @@ const model = {
 
   mount(refs = {}) {
     this.refs = {
+      attachmentInput: refs.attachmentInput || null,
       historyDialog: refs.historyDialog || null,
       input: refs.input || null,
       rawDialog: refs.rawDialog || null,
@@ -296,7 +480,9 @@ const model = {
   },
 
   unmount() {
+    this.cancelStreamingMessageRender();
     this.refs = {
+      attachmentInput: null,
       historyDialog: null,
       input: null,
       rawDialog: null,
@@ -337,8 +523,17 @@ const model = {
     return this.runtimeSystemPrompt;
   },
 
+  syncCurrentChatRuntime() {
+    if (!this.currentChatRuntime) {
+      return;
+    }
+
+    this.currentChatRuntime.messages = this.history.map((message) => createRuntimeMessageSnapshot(message));
+  },
+
   replaceHistory(nextHistory) {
     this.history = Array.isArray(nextHistory) ? [...nextHistory] : [];
+    this.syncCurrentChatRuntime();
     this.refreshHistoryMetrics();
   },
 
@@ -358,6 +553,9 @@ const model = {
 
   serializeHistory() {
     return this.history.map((message) => ({
+      attachments: Array.isArray(message.attachments)
+        ? message.attachments.map((attachment) => serializeAttachmentMetadata(attachment))
+        : [],
       content: message.content,
       id: message.id,
       kind: message.kind || "",
@@ -392,6 +590,7 @@ const model = {
   },
 
   async persistHistory(options = {}) {
+    this.syncCurrentChatRuntime();
     this.pendingHistorySnapshot = this.serializeHistory();
     const flushPromise = this.flushHistoryPersistence();
 
@@ -404,13 +603,47 @@ const model = {
     }
   },
 
+  cancelStreamingMessageRender() {
+    if (this.streamingRenderFrame) {
+      window.cancelAnimationFrame(this.streamingRenderFrame);
+      this.streamingRenderFrame = 0;
+    }
+
+    this.pendingStreamingMessage = null;
+  },
+
+  scheduleStreamingMessageRender(message) {
+    if (!message || message.role !== "assistant" || message.streaming !== true) {
+      return;
+    }
+
+    this.pendingStreamingMessage = message;
+
+    if (this.streamingRenderFrame) {
+      return;
+    }
+
+    this.streamingRenderFrame = window.requestAnimationFrame(() => {
+      this.streamingRenderFrame = 0;
+      const pendingMessage = this.pendingStreamingMessage;
+      this.pendingStreamingMessage = null;
+
+      if (!pendingMessage || !this.refs.thread) {
+        return;
+      }
+
+      agentView.updateStreamingAssistantMessage(this.refs.thread, pendingMessage, {
+        scroller: this.refs.scroller
+      });
+    });
+  },
+
   render(options = {}) {
     agentView.renderMessages(this.refs.thread, this.history, {
-      emptyStateText:
-        "Admin agent is ready for recovery and repair tasks. Settings persist in ~/conf/admin-chat.yaml and chat history persists in ~/hist/admin-chat.json.",
       isConversationBusy: this.isSending,
       outputOverrides: this.executionOutputOverrides,
       preserveScroll: options.preserveScroll === true,
+      queuedMessages: this.getQueuedPreviewMessages(),
       rerunningMessageId: this.rerunningMessageId,
       scroller: this.refs.scroller
     });
@@ -447,15 +680,192 @@ const model = {
     }
   },
 
+  clearComposerDraft() {
+    this.draft = "";
+    this.draftAttachments = [];
+
+    if (this.refs.input) {
+      this.refs.input.value = "";
+      agentView.autoResizeTextarea(this.refs.input);
+    }
+
+    if (this.refs.attachmentInput) {
+      this.refs.attachmentInput.value = "";
+    }
+  },
+
+  createDraftSubmissionSnapshot() {
+    const content = this.draft.trim();
+    const attachments = this.draftAttachments.slice();
+
+    if (!content && !attachments.length) {
+      return null;
+    }
+
+    return {
+      attachments,
+      content
+    };
+  },
+
+  queueDraftSubmission() {
+    const snapshot = this.createDraftSubmissionSnapshot();
+
+    if (!snapshot) {
+      return false;
+    }
+
+    this.queuedSubmissions = [...this.queuedSubmissions, snapshot];
+    this.clearComposerDraft();
+    this.status =
+      this.queuedSubmissionCount === 1
+        ? "1 message queued for the next step."
+        : `${this.queuedSubmissionCount} messages queued for the next steps.`;
+    this.render({
+      preserveScroll: true
+    });
+    return true;
+  },
+
+  consumeNextQueuedSubmissionMessage() {
+    if (!this.queuedSubmissions.length) {
+      return null;
+    }
+
+    const [snapshot, ...rest] = this.queuedSubmissions;
+    this.queuedSubmissions = rest;
+    return createMessage("user", snapshot.content, {
+      attachments: Array.isArray(snapshot.attachments) ? snapshot.attachments.slice() : []
+    });
+  },
+
+  getQueuedPreviewMessages() {
+    return this.queuedSubmissions
+      .map((submission, index) =>
+        createMessage("user", submission.content, {
+          attachments: Array.isArray(submission.attachments) ? submission.attachments.slice() : [],
+          kind: "queued"
+        })
+      )
+      .map((message, index) => ({
+        ...message,
+        id: `queued-preview-${index}`
+      }));
+  },
+
+  getBoundaryAction() {
+    if (this.hasQueuedSubmission) {
+      return "queued";
+    }
+
+    if (this.stopRequested) {
+      return "stopped";
+    }
+
+    return "";
+  },
+
   handleDraftInput(event) {
     this.syncDraft(event.target.value);
+  },
+
+  openAttachmentPicker() {
+    if (this.isAttachmentPickerDisabled) {
+      return;
+    }
+
+    this.refs.attachmentInput?.click();
+  },
+
+  handleAttachmentInput(event) {
+    const nextAttachments = createDraftAttachments(event?.target?.files);
+
+    if (!nextAttachments.length) {
+      if (event?.target) {
+        event.target.value = "";
+      }
+      return;
+    }
+
+    const existingKeys = new Set(
+      this.draftAttachments.map(
+        (attachment) =>
+          `${attachment.name}::${attachment.size}::${attachment.lastModified}::${attachment.type}`
+      )
+    );
+    const uniqueAttachments = nextAttachments.filter((attachment) => {
+      const key = `${attachment.name}::${attachment.size}::${attachment.lastModified}::${attachment.type}`;
+
+      if (existingKeys.has(key)) {
+        return false;
+      }
+
+      existingKeys.add(key);
+      return true;
+    });
+
+    if (uniqueAttachments.length) {
+      this.draftAttachments = [...this.draftAttachments, ...uniqueAttachments];
+      this.render({
+        preserveScroll: true
+      });
+      this.status = `${this.draftAttachments.length} attachment${
+        this.draftAttachments.length === 1 ? "" : "s"
+      } ready.`;
+    }
+
+    if (event?.target) {
+      event.target.value = "";
+    }
+  },
+
+  removeDraftAttachment(attachmentId) {
+    const nextAttachments = this.draftAttachments.filter((attachment) => attachment.id !== attachmentId);
+
+    if (nextAttachments.length === this.draftAttachments.length) {
+      return;
+    }
+
+    this.draftAttachments = nextAttachments;
+    this.render({
+      preserveScroll: true
+    });
+    this.status = this.draftAttachments.length
+      ? `${this.draftAttachments.length} attachment${this.draftAttachments.length === 1 ? "" : "s"} ready.`
+      : "Attachment removed.";
   },
 
   handleComposerKeydown(event) {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      this.submitMessage();
+      this.handleComposerPrimaryAction();
     }
+  },
+
+  handleComposerPrimaryAction() {
+    if (this.isSending) {
+      if (this.queueDraftSubmission()) {
+        return;
+      }
+
+      if (!this.hasQueuedSubmission) {
+        this.requestStop();
+      }
+
+      return;
+    }
+
+    void this.submitMessage();
+  },
+
+  requestStop() {
+    if (!this.isSending) {
+      return;
+    }
+
+    this.stopRequested = true;
+    this.activeRequestController?.abort();
+    this.status = "Stopping after the current step...";
   },
 
   openSystemDialog() {
@@ -607,13 +1017,23 @@ const model = {
   async handleClearClick() {
     this.closeRawDialog();
     this.rawOutputContent = "";
+    this.clearComposerDraft();
+    this.queuedSubmissions = [];
+    this.cancelStreamingMessageRender();
     this.replaceHistory([]);
     this.executionOutputOverrides = Object.create(null);
     this.rerunningMessageId = "";
+    this.stopRequested = false;
+    this.activeRequestController?.abort();
+    this.activeRequestController = null;
 
     await this.persistHistory({
       immediate: true
     });
+
+    if (this.currentChatRuntime?.attachments) {
+      this.currentChatRuntime.attachments.clear();
+    }
 
     if (this.executionContext) {
       this.executionContext.reset();
@@ -628,25 +1048,65 @@ const model = {
     const runtimeSystemPrompt = await prompt.buildRuntimeAdminSystemPrompt(this.systemPrompt, {
       defaultSystemPrompt: this.defaultSystemPrompt
     });
+    this.runtimeSystemPrompt = runtimeSystemPrompt;
+    const controller = new AbortController();
+    this.activeRequestController = controller;
 
-    await agentApi.streamAdminAgentCompletion({
-      settings: this.settings,
-      systemPrompt: runtimeSystemPrompt,
-      messages: requestMessages,
-      onDelta: (delta) => {
-        assistantMessage.content += delta;
-        this.refreshHistoryMetrics();
-        void this.persistHistory();
-        this.render();
+    try {
+      await agentApi.streamAdminAgentCompletion({
+        settings: this.settings,
+        systemPrompt: runtimeSystemPrompt,
+        messages: requestMessages,
+        onDelta: (delta) => {
+          assistantMessage.content += delta;
+          this.scheduleStreamingMessageRender(assistantMessage);
+        },
+        signal: controller.signal
+      });
+    } catch (error) {
+      assistantMessage.streaming = false;
+      this.cancelStreamingMessageRender();
+
+      if (this.activeRequestController === controller) {
+        this.activeRequestController = null;
       }
-    });
+
+      if (isAbortError(error) && this.stopRequested) {
+        const hasContent = Boolean(assistantMessage.content.trim());
+
+        if (hasContent) {
+          this.refreshHistoryMetrics();
+          await this.persistHistory({
+            immediate: true
+          });
+          this.render();
+        }
+
+        return {
+          hasContent,
+          stopped: true
+        };
+      }
+
+      throw error;
+    }
 
     assistantMessage.streaming = false;
+    this.cancelStreamingMessageRender();
+
+    if (this.activeRequestController === controller) {
+      this.activeRequestController = null;
+    }
+
+    this.refreshHistoryMetrics();
     await this.persistHistory({
       immediate: true
     });
     this.render();
-    return Boolean(assistantMessage.content.trim());
+    return {
+      hasContent: Boolean(assistantMessage.content.trim()),
+      stopped: false
+    };
   },
 
   async handleCompactClick() {
@@ -792,6 +1252,12 @@ const model = {
   },
 
   async runConversationLoop(initialUserMessage) {
+    this.currentChatRuntime.attachments.rememberMessageAttachments(
+      initialUserMessage.id,
+      initialUserMessage.attachments
+    );
+    this.currentChatRuntime.attachments.setActiveMessage(initialUserMessage.id);
+
     let nextUserMessage = initialUserMessage;
     let emptyAssistantRetryCount = 0;
 
@@ -813,20 +1279,44 @@ const model = {
         }
       }
 
+      const boundaryActionBeforeStream = this.getBoundaryAction();
+
+      if (boundaryActionBeforeStream) {
+        return boundaryActionBeforeStream;
+      }
+
       const requestMessages =
         this.history[this.history.length - 1]?.id === nextUserMessage.id
           ? [...this.history]
           : [...this.history, nextUserMessage];
       const assistantMessage = createStreamingAssistantMessage();
 
-      this.replaceHistory([...requestMessages, assistantMessage]);
-      void this.persistHistory();
+      this.history = [...requestMessages, assistantMessage];
+      this.syncCurrentChatRuntime();
       this.render();
 
       try {
-        const hasAssistantContent = await this.streamAssistantResponse(requestMessages, assistantMessage);
+        const streamResult = await this.streamAssistantResponse(requestMessages, assistantMessage);
 
-        if (!hasAssistantContent) {
+        if (streamResult.stopped) {
+          if (!streamResult.hasContent) {
+            this.replaceHistory(requestMessages);
+            await this.persistHistory({
+              immediate: true
+            });
+            this.render();
+          }
+
+          return this.getBoundaryAction() || "stopped";
+        }
+
+        const boundaryActionAfterResponse = this.getBoundaryAction();
+
+        if (boundaryActionAfterResponse) {
+          return boundaryActionAfterResponse;
+        }
+
+        if (!streamResult.hasContent) {
           if (isExecutionFollowUpKind(nextUserMessage.kind) && emptyAssistantRetryCount < MAX_PROTOCOL_RETRY_COUNT) {
             emptyAssistantRetryCount += 1;
             this.replaceHistory(requestMessages);
@@ -847,13 +1337,16 @@ const model = {
             immediate: true
           });
           this.render();
-          return;
+          return "complete";
         }
       } catch (error) {
         assistantMessage.streaming = false;
+        this.cancelStreamingMessageRender();
 
         if (!assistantMessage.content.trim()) {
           this.replaceHistory(requestMessages);
+        } else {
+          this.refreshHistoryMetrics();
         }
 
         await this.persistHistory({
@@ -867,7 +1360,7 @@ const model = {
       const executionResults = await this.executeAssistantBlocks(assistantMessage.content);
 
       if (!executionResults || !executionResults.length) {
-        return;
+        return "complete";
       }
 
       const executionOutputMessage = createMessage("user", execution.formatExecutionResultsMessage(executionResults), {
@@ -879,8 +1372,71 @@ const model = {
       });
       this.render();
 
+      const boundaryActionAfterExecution = this.getBoundaryAction();
+
+      if (boundaryActionAfterExecution) {
+        return boundaryActionAfterExecution;
+      }
+
       nextUserMessage = executionOutputMessage;
       this.status = "Sending code execution output...";
+    }
+
+    return "complete";
+  },
+
+  async runSubmissionSeries(initialUserMessage) {
+    let nextUserMessage = initialUserMessage;
+    let finalOutcome = "complete";
+
+    this.isSending = true;
+    this.stopRequested = false;
+
+    try {
+      while (nextUserMessage) {
+        const outcome = await this.runConversationLoop(nextUserMessage);
+        finalOutcome = outcome;
+
+        if (outcome === "queued") {
+          nextUserMessage = this.consumeNextQueuedSubmissionMessage();
+
+          if (nextUserMessage) {
+            this.stopRequested = false;
+            this.status = "Sending queued message...";
+            continue;
+          }
+
+          finalOutcome = "complete";
+          break;
+        }
+
+        if (outcome === "stopped") {
+          this.status = "Stopped.";
+          break;
+        }
+
+        const queuedMessage = this.consumeNextQueuedSubmissionMessage();
+
+        if (queuedMessage) {
+          nextUserMessage = queuedMessage;
+          this.status = "Sending queued message...";
+          continue;
+        }
+
+        nextUserMessage = null;
+      }
+
+      if (finalOutcome === "complete") {
+        this.status = "Ready.";
+      }
+    } catch (error) {
+      this.status = error.message;
+    } finally {
+      this.activeRequestController = null;
+      this.isSending = false;
+      this.stopRequested = false;
+      this.render();
+      this.focusInput();
     }
   },
 
@@ -896,9 +1452,9 @@ const model = {
       return;
     }
 
-    const messageText = this.draft.trim();
+    const draftSubmission = this.createDraftSubmissionSnapshot();
 
-    if (!messageText) {
+    if (!draftSubmission) {
       return;
     }
 
@@ -921,26 +1477,11 @@ const model = {
       }
     }
 
-    this.isSending = true;
-    const userMessage = createMessage("user", messageText);
-
-    this.draft = "";
-
-    if (this.refs.input) {
-      this.refs.input.value = "";
-      agentView.autoResizeTextarea(this.refs.input);
-    }
-
-    try {
-      await this.runConversationLoop(userMessage);
-      this.status = "Ready.";
-    } catch (error) {
-      this.status = error.message;
-    } finally {
-      this.isSending = false;
-      this.render();
-      this.focusInput();
-    }
+    const userMessage = createMessage("user", draftSubmission.content, {
+      attachments: draftSubmission.attachments
+    });
+    this.clearComposerDraft();
+    await this.runSubmissionSeries(userMessage);
   },
 
   async handleThreadClick(event) {

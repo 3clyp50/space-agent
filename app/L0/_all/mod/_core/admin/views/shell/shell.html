@@ -72,6 +72,17 @@
                   </section>
 
                   <section
+                    id="admin-panel-files"
+                    class="admin-panel-shell admin-panel-shell-files"
+                    x-show="$store.adminPage.isTabActive('files')"
+                    x-cloak
+                    role="tabpanel"
+                    aria-labelledby="admin-tab-files"
+                  >
+                    <x-component path="/mod/_core/admin/views/files/panel.html"></x-component>
+                  </section>
+
+                  <section
                     id="admin-panel-modules"
                     class="admin-panel-shell"
                     x-show="$store.adminPage.isTabActive('modules')"
@@ -101,7 +112,7 @@
           </div>
 
           <section class="pane main-pane" aria-label="Main application">
-            <iframe x-ref="mainFrame" class="main-frame" title="Space Agent main app" src="/index.html"></iframe>
+            <iframe x-ref="mainFrame" class="main-frame" title="Space Agent main app" :src="$store.adminShell.mainFrameUrl"></iframe>
           </section>
         </div>
       </template>

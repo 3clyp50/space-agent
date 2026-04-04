@@ -6,7 +6,7 @@ function createDefaultConfig() {
     systemPrompt: "",
     agentX: null,
     agentY: null,
-    isCollapsed: false
+    isCollapsed: true
   };
 }
 

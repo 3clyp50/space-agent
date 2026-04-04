@@ -10,7 +10,7 @@
         <section
           class="admin-agent-surface"
           x-cloak
-          x-init="$nextTick(() => $store.adminAgent.mount({ historyDialog: $refs.historyDialog, input: $refs.input, rawDialog: $refs.rawDialog, scroller: $refs.scroller, settingsDialog: $refs.settingsDialog, systemDialog: $refs.systemDialog, thread: $refs.thread }))"
+          x-init="$nextTick(() => $store.adminAgent.mount({ attachmentInput: $refs.attachmentInput, historyDialog: $refs.historyDialog, input: $refs.input, rawDialog: $refs.rawDialog, scroller: $refs.scroller, settingsDialog: $refs.settingsDialog, systemDialog: $refs.systemDialog, thread: $refs.thread }))"
           x-destroy="$store.adminAgent.unmount()"
         >
           <header class="admin-agent-toolbar">
@@ -63,7 +63,14 @@
                 </button>
               </div>
             </div>
-            <form class="chat-composer" @submit.prevent="$store.adminAgent.submitMessage()">
+            <form class="chat-composer" @submit.prevent="$store.adminAgent.handleComposerPrimaryAction()">
+              <input
+                x-ref="attachmentInput"
+                type="file"
+                multiple
+                class="composer-attachment-input"
+                @change="$store.adminAgent.handleAttachmentInput($event)"
+              />
               <textarea
                 x-ref="input"
                 x-create="$nextTick(() => $el.focus({ preventScroll: true }))"
@@ -76,15 +83,48 @@
                 @input="$store.adminAgent.handleDraftInput($event)"
                 @keydown="$store.adminAgent.handleComposerKeydown($event)"
               ></textarea>
+              <template x-if="$store.adminAgent.draftAttachments.length">
+                <div class="composer-attachments" aria-label="Selected attachments">
+                  <template x-for="attachment in $store.adminAgent.draftAttachments" :key="attachment.id">
+                    <button
+                      type="button"
+                      class="composer-attachment"
+                      @click="$store.adminAgent.removeDraftAttachment(attachment.id)"
+                      :title="`Remove ${attachment.name}`"
+                    >
+                      <span class="composer-attachment-name" x-text="attachment.name"></span>
+                      <x-icon>close</x-icon>
+                    </button>
+                  </template>
+                </div>
+              </template>
               <div class="chat-composer-actions">
                 <span class="composer-hint">Enter to send, Shift+Enter for newline</span>
-                <button
-                  type="submit"
-                  class="primary-button"
-                  :disabled="$store.adminAgent.isComposerSubmitDisabled"
-                >
-                  Send
-                </button>
+                <div class="admin-agent-composer-buttons">
+                  <button
+                    type="button"
+                    class="secondary-button admin-agent-attach-button"
+                    :disabled="$store.adminAgent.isAttachmentPickerDisabled"
+                    @click="$store.adminAgent.openAttachmentPicker()"
+                  >
+                    <x-icon>attach_file</x-icon>
+                    <span>Attach</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="primary-button admin-agent-send-button"
+                    :class="{
+                      'is-busy': $store.adminAgent.isPrimaryActionBusy,
+                      'is-stop': $store.adminAgent.isPrimaryActionStop
+                    }"
+                    :disabled="$store.adminAgent.isPrimaryActionDisabled"
+                    :title="$store.adminAgent.primaryActionLabel"
+                    @click="$store.adminAgent.handleComposerPrimaryAction()"
+                  >
+                    <x-icon x-text="$store.adminAgent.primaryActionIcon"></x-icon>
+                    <span x-text="$store.adminAgent.primaryActionButtonText"></span>
+                  </button>
+                </div>
               </div>
             </form>
           </footer>
@@ -115,7 +155,7 @@
                       Clear
                     </button>
                     <button type="button" class="secondary-button" @click="$store.adminAgent.closeSystemDialog()">Cancel</button>
-                    <button type="submit" class="primary-button">Save Instructions</button>
+                    <button type="submit" class="confirm-button">Save Instructions</button>
                   </div>
                 </form>
               </dialog>
@@ -167,7 +207,7 @@
                       Defaults
                     </button>
                     <button type="button" class="secondary-button" @click="$store.adminAgent.closeSettingsDialog()">Cancel</button>
-                    <button type="submit" class="primary-button">Save Settings</button>
+                    <button type="submit" class="confirm-button">Save Settings</button>
                   </div>
                 </form>
               </dialog>

@@ -43,9 +43,33 @@
 
 /**
  * @typedef {{
+ *   path: string,
+ *   isDirectory: boolean,
+ *   modifiedAt: string,
+ *   size: number
+ * }} FileInfoApiResult
+ */
+
+/**
+ * @typedef {{
  *   count: number,
  *   paths: string[]
  * }} PathBatchApiResult
+ */
+
+/**
+ * @typedef {{ fromPath: string, toPath: string }} FileTransferInput
+ */
+
+/**
+ * @typedef {{ entries: FileTransferInput[] }} FileTransferBatchOptions
+ */
+
+/**
+ * @typedef {{
+ *   count: number,
+ *   entries: FileTransferInput[]
+ * }} FileTransferBatchApiResult
  */
 
 /**
@@ -267,6 +291,66 @@ function createFileDeleteRequest(pathOrPaths) {
   };
 }
 
+function createFileTransferRequest(pathOrEntries, toPath) {
+  if (Array.isArray(pathOrEntries)) {
+    return {
+      method: "POST",
+      body: {
+        entries: pathOrEntries
+      }
+    };
+  }
+
+  if (isPlainObject(pathOrEntries) && Array.isArray(pathOrEntries.entries)) {
+    return {
+      method: "POST",
+      body: {
+        entries: pathOrEntries.entries
+      }
+    };
+  }
+
+  if (
+    isPlainObject(pathOrEntries) &&
+    typeof pathOrEntries.fromPath === "string" &&
+    typeof pathOrEntries.toPath === "string"
+  ) {
+    return {
+      method: "POST",
+      body: {
+        fromPath: pathOrEntries.fromPath,
+        toPath: pathOrEntries.toPath
+      }
+    };
+  }
+
+  return {
+    method: "POST",
+    body: {
+      fromPath: pathOrEntries,
+      toPath
+    }
+  };
+}
+
+function createFileInfoRequest(pathOrOptions) {
+  if (isPlainObject(pathOrOptions) && typeof pathOrOptions.path === "string") {
+    return {
+      method: "POST",
+      body: {
+        path: pathOrOptions.path
+      }
+    };
+  }
+
+  return {
+    method: "GET",
+    query: {
+      path: pathOrOptions
+    }
+  };
+}
+
 export function createApiClient(options = {}) {
   const basePath = options.basePath || "/api";
 
@@ -366,6 +450,33 @@ export function createApiClient(options = {}) {
   }
 
   /**
+   * Return metadata for an authenticated app file or folder.
+   * `fileInfo()` accepts app-rooted paths such as `L2/alice/note.txt` and the
+   * `~` or `~/...` shorthand for the current user's `L2/<username>/...` path.
+   *
+   * @param {string | { path: string }} pathOrOptions
+   * @returns {Promise<FileInfoApiResult>}
+   */
+  async function fileInfo(pathOrOptions) {
+    return call("file_info", createFileInfoRequest(pathOrOptions));
+  }
+
+  /**
+   * Copy authenticated app files or folders.
+   * `fileCopy()` accepts app-rooted paths such as `L2/alice/note.txt`,
+   * directory paths that end with `/`, and the `~` or `~/...` shorthand for
+   * the current user's `L2/<username>/...` path. The destination path must be
+   * explicit and writable, and batch copies accept composed `entries` input.
+   *
+   * @param {string | FileTransferInput[] | FileTransferBatchOptions | FileTransferInput} pathOrEntries
+   * @param {string} [toPath]
+   * @returns {Promise<FileTransferInput | FileTransferBatchApiResult>}
+   */
+  async function fileCopy(pathOrEntries, toPath) {
+    return call("file_copy", createFileTransferRequest(pathOrEntries, toPath));
+  }
+
+  /**
    * List authenticated app paths.
    * `fileList()` accepts app-rooted paths such as `L2/alice/` and the
    * `~` or `~/...` shorthand for the current user's `L2/<username>/...` path.
@@ -385,6 +496,21 @@ export function createApiClient(options = {}) {
   }
 
   /**
+   * Move or rename authenticated app files or folders.
+   * `fileMove()` accepts app-rooted paths such as `L2/alice/note.txt`,
+   * directory paths that end with `/`, and the `~` or `~/...` shorthand for
+   * the current user's `L2/<username>/...` path. The destination path must be
+   * explicit and writable, and batch moves accept composed `entries` input.
+   *
+   * @param {string | FileTransferInput[] | FileTransferBatchOptions | FileTransferInput} pathOrEntries
+   * @param {string} [toPath]
+   * @returns {Promise<FileTransferInput | FileTransferBatchApiResult>}
+   */
+  async function fileMove(pathOrEntries, toPath) {
+    return call("file_move", createFileTransferRequest(pathOrEntries, toPath));
+  }
+
+  /**
    * Return the authenticated user's derived profile snapshot from the backend.
    *
    * @returns {Promise<UserSelfInfoResult>}
@@ -397,8 +523,11 @@ export function createApiClient(options = {}) {
 
   return {
     call,
+    fileCopy,
     fileDelete,
+    fileInfo,
     fileList,
+    fileMove,
     fileRead,
     fileWrite,
     health,

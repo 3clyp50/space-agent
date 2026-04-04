@@ -1,10 +1,36 @@
 const HORIZONTAL_LAYOUT = "horizontal";
 const VERTICAL_LAYOUT = "vertical";
+const DEFAULT_MAIN_FRAME_URL = "/index.html";
+
+function resolveRequestedMainFrameUrl(locationObject = globalThis.window?.location) {
+  if (!locationObject) {
+    return DEFAULT_MAIN_FRAME_URL;
+  }
+
+  const requestedUrl = new URLSearchParams(locationObject.search || "").get("url");
+
+  if (!requestedUrl) {
+    return DEFAULT_MAIN_FRAME_URL;
+  }
+
+  try {
+    const resolvedUrl = new URL(requestedUrl, locationObject.href);
+
+    if (resolvedUrl.origin !== locationObject.origin) {
+      return DEFAULT_MAIN_FRAME_URL;
+    }
+
+    return `${resolvedUrl.pathname}${resolvedUrl.search}${resolvedUrl.hash}` || DEFAULT_MAIN_FRAME_URL;
+  } catch {
+    return DEFAULT_MAIN_FRAME_URL;
+  }
+}
 
 const shellModel = {
   dragPointerId: null,
   dragging: false,
   layout: HORIZONTAL_LAYOUT,
+  mainFrameUrl: resolveRequestedMainFrameUrl(),
   portraitQuery: null,
   refs: {},
   splitRatios: {
@@ -47,6 +73,37 @@ const shellModel = {
     this.syncLayoutHandler = null;
     this.portraitQuery = null;
     this.refs = {};
+  },
+
+  getMainFrameUrl() {
+    const frame = this.refs.mainFrame;
+
+    if (!frame) {
+      return null;
+    }
+
+    try {
+      const href = frame.contentWindow?.location?.href;
+
+      if (typeof href === "string" && href.length > 0 && href !== "about:blank") {
+        return href;
+      }
+    } catch {
+      // Ignore iframe access failures and fall back to the configured src.
+    }
+
+    const frameSrc = frame.getAttribute("src") || frame.src;
+
+    if (typeof frameSrc !== "string" || frameSrc.length === 0) {
+      return null;
+    }
+
+    return new URL(frameSrc, globalThis.window.location.href).href;
+  },
+
+  leaveAdminArea() {
+    const targetUrl = this.getMainFrameUrl() || new URL(this.mainFrameUrl || DEFAULT_MAIN_FRAME_URL, globalThis.window.location.href).href;
+    globalThis.window.location.assign(targetUrl);
   },
 
   getLayout() {

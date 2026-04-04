@@ -1,4 +1,5 @@
 import * as config from "/mod/_core/admin/views/agent/config.js";
+import { buildMessageContentForApi } from "/mod/_core/admin/views/agent/attachments.js";
 import * as llmParams from "/mod/_core/admin/views/agent/llm-params.js";
 import * as proxyUrl from "/mod/_core/framework/js/proxy-url.js";
 
@@ -71,6 +72,7 @@ function normalizeConversationMessage(message) {
   }
 
   return {
+    attachments: Array.isArray(message?.attachments) ? message.attachments : [],
     content: typeof message.content === "string" ? message.content : "",
     role: message.role
   };
@@ -107,7 +109,10 @@ export function buildAdminAgentPromptMessages(systemPrompt, messages) {
       return;
     }
 
-    requestMessages.push(normalizedMessage);
+    requestMessages.push({
+      role: normalizedMessage.role,
+      content: buildMessageContentForApi(normalizedMessage)
+    });
   });
 
   return requestMessages;
@@ -226,7 +231,7 @@ async function readStreamingResponse(response, onDelta) {
   }
 }
 
-export async function streamAdminAgentCompletion({ settings, systemPrompt, messages, onDelta }) {
+export async function streamAdminAgentCompletion({ settings, systemPrompt, messages, onDelta, signal }) {
   if (!settings.apiEndpoint.trim()) {
     throw new Error("Set an API endpoint before sending a message.");
   }
@@ -243,7 +248,8 @@ export async function streamAdminAgentCompletion({ settings, systemPrompt, messa
   const response = await fetch(requestUrl, {
     method: "POST",
     headers: createHeaders(settings.apiEndpoint, settings.apiKey.trim()),
-    body: JSON.stringify(createRequestBody(settings, systemPrompt, messages))
+    body: JSON.stringify(createRequestBody(settings, systemPrompt, messages)),
+    signal
   });
 
   if (!response.ok) {

@@ -1,6 +1,6 @@
 const SEARCH_DEBOUNCE_MS = 180;
 const DEFAULT_AREA = "l2_self";
-const FILE_BROWSER_PLACEHOLDER_TITLE = "File browser is not wired into admin yet.";
+const FILE_BROWSER_PLACEHOLDER_TITLE = "Use the Files tab to browse module folders.";
 
 const baseAreaOptions = Object.freeze([
   {
