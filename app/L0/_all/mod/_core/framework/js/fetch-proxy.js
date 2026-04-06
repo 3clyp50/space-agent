@@ -1,9 +1,39 @@
 import { buildProxyUrl, isProxyableExternalUrl } from "./proxy-url.js";
 
 const FETCH_PROXY_MARKER = Symbol.for("space.fetch-proxy-installed");
+const proxyFallbackOrigins = new Set();
 
 function requestCanHaveBody(method) {
   return !["GET", "HEAD"].includes(String(method || "GET").toUpperCase());
+}
+
+function getProxyFallbackOriginKey(targetUrl) {
+  return new URL(targetUrl, window.location.href).origin;
+}
+
+function hasProxyFallbackOrigin(targetUrl) {
+  return proxyFallbackOrigins.has(getProxyFallbackOriginKey(targetUrl));
+}
+
+function rememberProxyFallbackOrigin(targetUrl) {
+  proxyFallbackOrigins.add(getProxyFallbackOriginKey(targetUrl));
+}
+
+function requestSupportsProxyFallback(request) {
+  const mode = String(request.mode || "cors").toLowerCase();
+  return !["no-cors", "same-origin"].includes(mode);
+}
+
+function shouldRetryViaProxy(request, error) {
+  if (!requestSupportsProxyFallback(request)) {
+    return false;
+  }
+
+  if (request.signal?.aborted || error?.name === "AbortError") {
+    return false;
+  }
+
+  return error instanceof TypeError || error?.name === "TypeError";
 }
 
 async function buildProxiedFetchArgs(request, proxyPath) {
@@ -24,6 +54,11 @@ async function buildProxiedFetchArgs(request, proxyPath) {
   return [proxyUrl, init];
 }
 
+async function fetchViaProxy(originalFetch, request, proxyPath) {
+  const [proxyUrl, proxyInit] = await buildProxiedFetchArgs(request, proxyPath);
+  return originalFetch(proxyUrl, proxyInit);
+}
+
 export function installFetchProxy(options = {}) {
   const proxyPath = options.proxyPath || "/api/proxy";
   const currentFetch = window.fetch;
@@ -41,11 +76,39 @@ export function installFetchProxy(options = {}) {
       return originalFetch(request);
     }
 
-    const [proxyUrl, proxyInit] = await buildProxiedFetchArgs(request, proxyPath);
-    return originalFetch(proxyUrl, proxyInit);
+    if (requestSupportsProxyFallback(request) && hasProxyFallbackOrigin(request.url)) {
+      return fetchViaProxy(originalFetch, request, proxyPath);
+    }
+
+    const fallbackRequest = request.clone();
+
+    try {
+      return await originalFetch(request);
+    } catch (error) {
+      if (!shouldRetryViaProxy(request, error)) {
+        throw error;
+      }
+
+      // The browser only exposes blocked cross-origin fetches as generic TypeErrors.
+      // Cache the origin only after the backend retry succeeds.
+      try {
+        const response = await fetchViaProxy(originalFetch, fallbackRequest, proxyPath);
+        rememberProxyFallbackOrigin(fallbackRequest.url);
+        return response;
+      } catch (proxyError) {
+        if (proxyError && typeof proxyError === "object" && proxyError.cause === undefined) {
+          proxyError.cause = error;
+        }
+
+        throw proxyError;
+      }
+    }
   }
 
   proxiedFetch.originalFetch = originalFetch;
+  proxiedFetch.hasProxyFallbackOrigin = hasProxyFallbackOrigin;
+  proxiedFetch.rememberProxyFallbackOrigin = rememberProxyFallbackOrigin;
+  proxiedFetch.clearProxyFallbackOrigins = () => proxyFallbackOrigins.clear();
   proxiedFetch[FETCH_PROXY_MARKER] = true;
 
   window.fetch = proxiedFetch;

@@ -207,7 +207,8 @@ Runtime guidance:
 - use `space.api.userSelfInfo()` as the canonical browser-side identity snapshot; it returns `{ username, fullName, groups, managedGroups }`, and frontend code should derive writable app roots from that data plus the standard layer rules
 - use `space.config` for frontend reads of backend parameters that were explicitly marked `frontend_exposed`
 - use `space.utils.markdown.render(text, target)` for lightweight shared markdown rendering into a `.markdown` wrapper and `space.utils.markdown.parseDocument(...)` for frontmatter parsing; keep feature-local presentation in the owning module's CSS
-- use `space.utils.yaml.parse(...)` and `space.utils.yaml.stringify(...)` for lightweight frontend YAML parsing and serialization owned by browser modules
+- use `space.utils.yaml.parse(...)` and `space.utils.yaml.stringify(...)` for frontend YAML parsing and serialization owned by browser modules; this wrapper is backed by the shared vendored YAML implementation so nested maps lists block scalars and standard YAML quoting stay consistent with the server helper
+- framework-managed external `fetch(...)` calls should prefer a direct browser request first; if the direct cross-origin request fails and the `/api/proxy` retry succeeds, the runtime should remember that origin in memory and route later requests for the same origin through the backend immediately
 - browser storage is for small non-authoritative UI state; persistent user state belongs in app files or explicit backend APIs
 
 ## Visual Direction

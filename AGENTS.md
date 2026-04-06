@@ -92,6 +92,7 @@ Top-level structure:
 - `commands/`: CLI command modules such as `serve`, `help`, `get`, `set`, `version`, and `update`
 - `app/`: browser runtime, layered customware model, shared frontend modules, and browser test surfaces
 - `server/`: thin local infrastructure runtime, with page shells, request routing, API hosting, fetch proxying, file-watch indexes, auth/session infrastructure, and Git support code
+- `tests/`: repo-level verification harnesses, prepared evaluation fixtures, and saved result artifacts
 - `packaging/`: optional Electron host and packaging scripts; native hosts should stay thin
 
 Project concepts:
@@ -179,6 +180,7 @@ Local ownership:
 
 - module-local `AGENTS.md` files inside `app/` own the concrete contracts for major frontend modules and surfaces
 - subsystem-local `AGENTS.md` files inside `server/` own the concrete contracts for router, pages, APIs, customware, auth, file-watch, and Git infrastructure
+- `tests/AGENTS.md` owns repo-level test harness rules and child test-harness docs
 - see `/app/AGENTS.md` and `/server/AGENTS.md` for the current map of local docs
 
 Documentation rules:

@@ -22,7 +22,7 @@ This module owns:
 - `js/AlpineStore.js`: store registration helper used by the runtime and legacy modules
 - Alpine directives and magic helpers registered during bootstrap
 - shared browser API helpers in `js/api-client.js`, `js/api.js`, `js/fetch-proxy.js`, `js/download.js`, and `js/proxy-url.js`
-- small shared parsing and utility helpers such as markdown frontmatter, YAML, and token counting
+- small shared parsing and utility helpers such as markdown frontmatter, the browser YAML wrapper, and token counting
 - shared framework CSS and icon font assets under `css/`
 
 ## Boot And Runtime Contract
@@ -45,7 +45,7 @@ Current boot order:
 - `space.fw.createStore`
 - `space.utils.markdown.render(text, target)` as a simple browser wrapper around the shared marked renderer; it replaces `target` contents with a `.markdown` root when a target is provided
 - `space.utils.markdown.parseDocument`
-- `space.utils.yaml.parse` and `stringify`, including multiline block-scalar strings used by persisted widget renderer source
+- `space.utils.yaml.parse` and `stringify`, backed by the vendored browser build of the shared `yaml` package so browser-side YAML behavior matches the server helper while still supporting multiline block scalars and readable nested structured output
 - `space.proxy`
 - `space.download`
 - `space.fetchExternal(...)`
@@ -54,6 +54,7 @@ Current API helper contract:
 
 - `space.api.userSelfInfo()` is the canonical frontend identity snapshot; frontend agents should use `username`, `managedGroups`, and `_admin` membership in `groups` to infer writable app roots before choosing where to store files or modules
 - `space.api.folderDownloadUrl(pathOrOptions)` builds the same-origin attachment URL for a permission-checked folder ZIP download without fetching the archive into browser memory
+- framework-managed external `fetch(...)` calls and `space.fetchExternal(...)` try the browser's direct request first; when a direct cross-origin attempt fails and the `/api/proxy` retry succeeds, the frontend remembers that origin for the rest of the runtime and routes later requests for the same origin through the backend immediately
 
 Rules:
 
@@ -99,5 +100,7 @@ Rules:
 - add shared runtime helpers here only when multiple modules genuinely need them
 - prefer explicit small runtime namespaces over loose globals
 - if a contract is used by only one module, keep it in that module instead of promoting it here too early
+- keep the external-fetch fallback cache runtime-local and in-memory; do not persist proxy-needed origins into storage or app files unless a user request explicitly adds that behavior
+- when updating the shared YAML package version or browser vendor copy, keep `js/yaml-lite.js` and `server/lib/utils/yaml_lite.js` aligned in the same session
 - when bootstrap, runtime namespaces, extension loading, or component loading change, also update `app/L0/_all/mod/_core/onscreen_agent/ext/skills/development/` because the onscreen development skill mirrors this module's contract
 - when changing bootstrap, runtime namespaces, extension loading, or component loading, update `/app/AGENTS.md` in the same session

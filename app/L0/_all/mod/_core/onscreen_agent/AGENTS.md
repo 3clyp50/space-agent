@@ -14,11 +14,26 @@ Documentation is top priority for this module. After any change under `_core/ons
 
 Current deeper docs:
 
+- `app/L0/_all/mod/_core/onscreen_agent/prompts/AGENTS.md`
 - `app/L0/_all/mod/_core/onscreen_agent/ext/skills/development/AGENTS.md`
+
+Parent vs child split:
+
+- this file owns overlay-wide runtime behavior, persistence, execution flow, skill loading, and cross-surface prompt contracts
+- `prompts/AGENTS.md` owns the shipped prompt files, token-budget rules, and prompt-text editing guidance
+- `ext/skills/development/AGENTS.md` owns the onscreen development skill tree and its mirrored frontend or backend source contracts
+
+Child doc section pattern:
+
+- `Purpose`
+- `Ownership`
+- `Local Contracts`
+- `Development Guidance`
 
 Update rules:
 
 - update this file when overlay-wide runtime behavior, skill loading, or ownership boundaries change
+- update the deeper prompt doc when shipped prompt file behavior, wording strategy, or token-budget rules change
 - update the deeper development-skill doc when the development skill tree, routing map, or mirrored source contracts change
 - when framework, router, API, path, permission, or auth contracts change in ways that affect the development skill tree, update the deeper doc in the same session
 
@@ -38,7 +53,7 @@ This module owns:
 - `llm.js` owns LLM-facing system-prompt file loading, optional example-message construction, always-loaded skill injection into the system prompt, runtime system-prompt assembly, prompt-instance caching, separate transient-message construction, final request assembly, history-compaction prompt loading, and the model-facing JS extension seams
 - `api.js` owns chat transport, HTTP error handling, and streaming response parsing; prompt-shaping logic lives in `llm.js`
 - `config.js` and `storage.js`: persisted settings, position, display mode, and history
-- `system-prompt.md`, `compact-prompt.md`, and `compact-prompt-auto.md`: shipped prompt files
+- `prompts/`: shipped prompt files and prompt-local documentation
 - `res/`: overlay-local assets
 - the `space.onscreenAgent` runtime namespace for overlay display control and externally triggered prompt submission
 
@@ -76,7 +91,8 @@ Current defaults:
 
 Prompt rules:
 
-- `system-prompt.md` is the firmware prompt
+- `prompts/system-prompt.md` is the firmware prompt
+- the current live firmware prompt was promoted from `tests/agent_llm_performance/prompts/012_open_goal_momentum.md` on 2026-04-06 after the widened parallel 18-case harness review, and the previous live prompt was backed up as `prompts/system-prompt.backup-before-012-open_goal_momentum-2026-04-06.md`
 - custom instructions are appended under `## User specific instructions`
 - the prepared prompt order is `system -> examples -> compacted history summary when present -> live history -> transient`
 - examples are optional, empty by default, and are inserted as ordinary alternating user or assistant messages ahead of live history rather than being folded into the system prompt
@@ -91,24 +107,47 @@ Prompt rules:
 - the built-in example extension under `ext/js/_core/onscreen_agent/llm.js/buildOnscreenAgentExampleMessages/end/user-self-info.js` should prepend a framework prompt asking the agent to check user detail, an assistant execution reply that calls `space.api.userSelfInfo()`, and a framework execution-result message populated with the live API result so the model sees both the expected execution format and the current user snapshot
 - the top-level skill catalog and `auto loaded` block are model-facing prompt context and therefore belong to `llm.js` orchestration even though `skills.js` still owns low-level skill discovery helpers and `space.skills.load(...)`
 - `_core/spaces` currently uses the sections seam only to inject a space-local `## Current Space Agent Instructions` section when the current space defines agent instructions; generic spaces workflow guidance belongs in the always-loaded `spaces` skill, and live widget catalogs or current-space details should be loaded on demand instead of being pre-injected into the prompt
+- the firmware prompt should start with an environment block that explains the agent is a JavaScript-based browser assistant living inside the live page and acting through browser state plus Space Agent runtime APIs
+- the firmware prompt should define a `$mission` block above `$protocol`; that `$mission` should tell the agent to be useful, follow the latest `$human_command`, and drive the user toward `$verified_completion` with minimal correct steps
+- the firmware prompt should also make the mission-level authority explicit: the agent acts as ship administrator for the runtime, uses available system authority on the user's behalf, and should do the work directly instead of asking for ordinary permission or assistance
+- the firmware prompt should define a strict mission `$protocol` under that `$mission` as the top-level operating contract and should make the agent classify every turn into `$conversation_mode` or `$task_mode` before doing anything else
+- the firmware prompt should define the overlay's reusable protocol terms explicitly: `$thrust_response` for assistant messages that continue the task by executing code, `$terminal_response` for assistant messages with no execution that end the turn, `$staging_sequence` for the pre-execution sentence, `$execution_gate` for `_____javascript`, `$execution` for the browser-side javascript run triggered by that gate, `$human_command` for `_____user`, `$framework_telemetry` for `_____framework`, and `$transient_context` for `_____transient`
+- the firmware prompt should center the control flow on one ordered turn loop: inspect latest non-transient input, map source, choose `$conversation_mode` or `$task_mode`, choose exactly one next move, then repeat after every `$framework_telemetry` turn
+- that ordered turn loop has already improved steering toward correct execution-first behavior and should be preferred over layering more fragmented prompt rules
+- the firmware prompt should forbid permission-seeking loops in `$task_mode`; if the next corrective or discovery or mutation `$thrust_response` is available and obvious, the prompt should instruct the agent to send it instead of offering or asking whether to proceed
+- the firmware prompt should also enforce discovery-first autonomy in `$task_mode`: if a needed fact is likely available from browser state runtime apis current page prior telemetry transient context attachments or ordinary fetch, the prompt should steer the agent to discover it before asking the user
+- the firmware prompt should also encode `action creates information`: when uncertain in `$task_mode`, it should steer the agent toward the safest useful info-creating execution rather than a stopping reply
+- the firmware prompt should also push best-effort continuation in `$task_mode`: if user intent is clear and only recoverable uncertainty remains, the prompt should steer the agent to use current context or runtime discovery before stopping
+- the firmware prompt should treat omitted scope as current-context by default when that scope is the natural reading of the request
+- the firmware prompt should treat self-referential scope words like `mine`, `here`, `local`, and `current` as instructions to use current context, and should prefer attempting direct browser or runtime access before asking
+- the firmware prompt should define `$verified_completion` against the requested outcome rather than intermediate discovery and should push the agent to continue when prerequisite data only unlocks the obvious next step
+- the firmware prompt should also force truly unavoidable blocking questions into one short direct question with no acknowledgement preface and no narration that a step is needed
+- the firmware prompt should treat short follow-up user fragments as likely missing values or redirects for the active task when they fit, instead of re-asking the old blocker
+- the firmware prompt should also force follow-up extraction after broad reads: if one more read can unpack or extract the answer, the agent should send another `$thrust_response` instead of stopping on partial telemetry
+- the firmware prompt should avoid concrete blocker examples that over-anchor one domain and should prefer general reusable rules when the behavior is cross-domain
+- the firmware prompt should make clear that in `$task_mode` a `$terminal_response` is the final non-executing shot for that turn, so it is forbidden before `$verified_completion` except for one truly unavoidable blocking question, and prompt wording should phrase violations as `$mission failed`
+- the firmware prompt should tell the agent that a `$thrust_response` is the only assistant output that keeps the task loop alive because it causes execution and yields the next `$framework_telemetry` turn
 - the firmware prompt should tell the agent that `space.api.userSelfInfo()` returns `{ username, fullName, groups, managedGroups }` and that writable app roots are derived from `username`, `managedGroups`, and `_admin` membership in `groups`
 - the firmware prompt should also remind the agent to `return await ...` for browser mutations that need confirmation, should refer to the active thread as `space.chat`, should use `space.utils.yaml.parse(...)` plus `space.utils.yaml.stringify(...)`, should explain writable-scope discovery from `space.api.userSelfInfo()` plus the standard layer rules, and should leave domain-specific widget workflow guidance to the always-loaded `spaces` skill instead of duplicating it in the base firmware prompt
+- the firmware prompt should enforce telemetry truth: the `$staging_sequence` must describe the code in the same message, read-only execution may not be narrated as mutation, success claims require matching success telemetry for that exact action, and an `execution error` telemetry turn forbids any success claim
+- the firmware prompt should also tell the agent that after a read stage, if the next mutation is clear, it must continue immediately with another `$thrust_response` rather than spending a `$terminal_response` on progress narration such as `I have it loaded and can patch next`
 - the firmware prompt should also tell the agent to keep large reads in normal top-level JavaScript variables and return only the narrow slice or summary needed for the next step unless the full text must stay in-model immediately, for example exact numbered patch lines
 - the firmware prompt examples must stay plain text and must not wrap execution snippets or execution-output examples in triple-backtick fences, because fenced examples train the overlay agent to emit fences after `_____javascript`
 - the firmware prompt should also enforce staged execution: if a helper result determines the next action, the agent should stop after that helper call and wait for the next turn instead of chaining discovery and dependent mutation in one JavaScript block
-- the firmware prompt should require one short explanatory sentence before execution blocks so the thread stays readable, but this should stay prompt pressure rather than a runtime validation error
+- the firmware prompt should require one short `$staging_sequence` sentence before execution blocks so the thread stays readable, but this should stay prompt pressure rather than a runtime validation error
 - the firmware prompt should also make clear that all execution narration belongs before `_____javascript`; there must be no explanatory prose after the separator because everything after it is executed as code
-- the firmware prompt should also make clear that silent execution is wrong and that a bare staging sentence such as `Checking the current widget source` is not acceptable progress when browser work is needed; if the sentence announces a browser step, that same message must continue with `_____javascript`
+- the firmware prompt should also make clear that silent execution is wrong and that a bare `$staging_sequence` such as `Checking the current widget source` is not acceptable progress when browser work is needed; if the sentence announces a browser step, that same message must continue with `_____javascript`
 - the firmware prompt should also tell the agent not to ask redundant clarification questions when the user already named an obvious runtime target such as a widget by name
 - the firmware prompt should also tell the agent to trust the exact runtime shape it just saw in `_____framework` or `_____transient` instead of hallucinating richer object shapes; if the runtime showed a plain-text catalog, the agent should read that text literally
 - the firmware prompt should tell the agent to stop after a successful mutation that appears to satisfy the user instead of making speculative extra edits
 - the firmware prompt should also tell the agent that after a successful mutation it must either execute again because more browser work is truly needed or answer the user normally; promise-only follow-up lines such as `Updating...` or `Applying...` are not acceptable
 - the firmware prompt should tell the agent never to emit raw JavaScript or fenced code as a normal reply; browser work must use the execution protocol, otherwise the reply must be ordinary prose
+- shipped firmware prompt changes should be compared in `tests/agent_llm_performance/` first, and live prompt promotion should require both automated harness success and manual review of the nominal passes
 - `execution.js` should fail fast when `_____javascript` is inline instead of occupying its own line, and should surface a direct protocol error telling the agent to put the explanatory sentence on the previous line and the separator alone on the next line
 - the firmware prompt should explain the prepared-message block markers explicitly: `_____user` means the real human user, `_____framework` means a runtime-generated follow-up turn, and `_____transient` is auto-injected mutable context
-- prompt-facing text here is token-budgeted; when editing `system-prompt.md`, prompt wrapper strings in `skills.js`, or any always-loaded skill, measure the prompt surface with the local tokenizer in the same session and prefer plain text, short labels, minimal markdown, minimal filler, and no unnecessary trailing punctuation
-- `compact-prompt.md` is used for user-triggered history compaction
-- `compact-prompt-auto.md` is used for automatic compaction during the loop
+- prompt-facing text here is token-budgeted; when editing `prompts/system-prompt.md`, prompt wrapper strings in `skills.js`, or any always-loaded skill, measure the prompt surface with the local tokenizer in the same session and prefer plain text, short labels, minimal markdown, minimal filler, and no unnecessary trailing punctuation
+- `prompts/compact-prompt.md` is used for user-triggered history compaction
+- `prompts/compact-prompt-auto.md` is used for automatic compaction during the loop
 
 ## JS Extension Seams
 
@@ -180,7 +219,7 @@ Current overlay behavior:
 - `store.js` should hold one prompt-instance object per chat surface, rebuild full prompt input when the overlay boots or the thread is reset or a new LLM turn is about to start, and reuse the cached system or examples or transient sections without recomputing the full prepared payload or token counts on every streamed delta
 - prompt-history previews and token counts are derived from the prepared outbound request payload so request-prep extensions stay visible in the context window instead of only affecting the final fetch call, but exact recomputation should happen only at stable boundaries such as request preparation, stop handling, or settled assistant completion, never on every streamed delta
 - the prompt-history modal must show the exact final prepared message payload that went or will go to the model, including example messages, any prepared `_____user` or `_____framework` blocks, and any separate trailing `_____transient` message
-- the prompt-history modal footer owns prepared-payload navigation and copy helpers: it should be implemented as one outer footer row with exactly two inner groups, one left and one right, so the three navigation buttons stay on the left edge and the four copy or close buttons stay on the right edge; it should reuse the shared compact modal button treatment from `_core/visual/forms/dialog.css` instead of reintroducing large pill-style modal controls locally, keep all footer controls on the same fixed compact button width so icon-bearing buttons do not outgrow `Close`, jump across prepared real-user `_____user` blocks rather than every user-role message, pin the targeted prepared message to the top of the history scroller on every jump, label example turns as `EXAMPLE USER` or `EXAMPLE ASSISTANT` in text mode, and copy system-only, history-only, or full prepared-payload slices using the currently selected text or JSON mode
+- the prompt-history modal footer owns prepared-payload navigation and copy helpers: it should be implemented as one outer footer row with exactly two inner groups, one left and one right, so the three navigation buttons stay on the left edge and the four copy or close buttons stay on the right edge; it should reuse the shared compact modal button treatment from `_core/visual/forms/dialog.css` instead of reintroducing large pill-style modal controls locally, keep all footer controls on the same fixed compact button width so icon-bearing buttons do not outgrow `Close`, jump across prepared real-user `_____user` blocks rather than every user-role message, pin the targeted prepared message to the top of the history scroller on every jump, label example turns as `EXAMPLE USER` or `EXAMPLE ASSISTANT` in text mode, and copy system-only, history-only, or full prepared-payload slices using the currently selected text or JSON mode, with the history-only slice limited to actual live or compacted history entries and excluding example or transient prompt context
 - text mode may render per-message sections for scanning, but JSON mode must stay a single raw prepared-payload block that remains mouse-selectable and copyable; real-user jump controls should still land on the same prepared message indexes in both modes, using line-based scrolling for the raw JSON view
 - model-facing helper outputs should prefer compact flat text over JSON when the agent only needs a lightweight catalog or status list, because token stability matters more than shape richness in overlay history
 - `execution.js` owns the execution transcript contract: successful no-return runs must emit `no result returned, no console logs`, result blocks must print `result↓` on its own line before the raw returned text so multiline payloads visibly continue below the label, structured result payloads should prefer `space.utils.yaml.stringify(...)` over JSON when the lightweight YAML helper can serialize them so history stays smaller, the live thread UI should retain full execution snapshots for the freshest execution result, and persisted execution-output turns should stay text-stable instead of being rewritten later with truncation markers or omission summaries

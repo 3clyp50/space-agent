@@ -432,15 +432,29 @@ function formatPromptHistoryRoleLabel(message, entry) {
   return normalizedRole.toUpperCase();
 }
 
-function getPromptHistoryMessageSlice(messages, slice = "all") {
+function isPromptHistoryActualHistoryEntry(entry) {
+  const source = getPromptHistoryEntrySource(entry);
+  return source === "history" || source === "history-compact";
+}
+
+function getPromptHistoryMessageSlice(messages, slice = "all", entries = []) {
   const promptMessages = Array.isArray(messages) ? messages : [];
+  const promptEntries = Array.isArray(entries) ? entries : [];
 
   if (slice === "system") {
     return promptMessages.filter((message) => normalizePromptHistoryRole(message) === "system");
   }
 
   if (slice === "history") {
-    return promptMessages.filter((message) => normalizePromptHistoryRole(message) !== "system");
+    return promptMessages.filter((message, index) => {
+      const entry = promptEntries[index];
+
+      if (entry) {
+        return isPromptHistoryActualHistoryEntry(entry);
+      }
+
+      return normalizePromptHistoryRole(message) !== "system";
+    });
   }
 
   return promptMessages;
@@ -3031,7 +3045,7 @@ const model = {
   },
 
   getPromptHistorySliceMessages(slice = "all") {
-    return getPromptHistoryMessageSlice(this.promptHistoryMessages, slice);
+    return getPromptHistoryMessageSlice(this.promptHistoryMessages, slice, this.promptHistoryEntries);
   },
 
   serializePromptHistorySlice(slice = "all") {

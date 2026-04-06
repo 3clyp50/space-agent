@@ -4,7 +4,7 @@ import * as llmParams from "/mod/_core/onscreen_agent/llm-params.js";
 import * as skills from "/mod/_core/onscreen_agent/skills.js";
 import * as proxyUrl from "/mod/_core/framework/js/proxy-url.js";
 
-export const DEFAULT_ONSCREEN_AGENT_SYSTEM_PROMPT_PATH = "/mod/_core/onscreen_agent/system-prompt.md";
+export const DEFAULT_ONSCREEN_AGENT_SYSTEM_PROMPT_PATH = "/mod/_core/onscreen_agent/prompts/system-prompt.md";
 export const ONSCREEN_AGENT_HISTORY_COMPACT_MODE = Object.freeze({
   AUTOMATIC: "automatic",
   USER: "user"
@@ -14,9 +14,9 @@ export const ONSCREEN_AGENT_PREPARED_MESSAGE_BLOCK = Object.freeze({
   TRANSIENT: "_____transient",
   USER: "_____user"
 });
-export const ONSCREEN_AGENT_HISTORY_COMPACT_PROMPT_PATH = "/mod/_core/onscreen_agent/compact-prompt.md";
+export const ONSCREEN_AGENT_HISTORY_COMPACT_PROMPT_PATH = "/mod/_core/onscreen_agent/prompts/compact-prompt.md";
 export const ONSCREEN_AGENT_HISTORY_AUTO_COMPACT_PROMPT_PATH =
-  "/mod/_core/onscreen_agent/compact-prompt-auto.md";
+  "/mod/_core/onscreen_agent/prompts/compact-prompt-auto.md";
 
 const ONSCREEN_AGENT_PROMPT_MESSAGE_SOURCE = Object.freeze({
   EXAMPLE: "example",
