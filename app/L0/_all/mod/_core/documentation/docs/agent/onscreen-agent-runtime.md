@@ -36,6 +36,7 @@ Important config fields:
 - `max_tokens`
 - optional `custom_system_prompt`
 - `agent_x`, `agent_y`
+- optional `hidden_edge`
 - optional `history_height`
 - `display_mode`
 
@@ -53,7 +54,7 @@ The overlay publishes `space.onscreenAgent`.
 
 That namespace is the stable external entry point for:
 
-- showing or hiding the overlay
+- showing or hiding the overlay, including revealing a persisted edge-hidden peeking pose before normal use resumes
 - triggering prompt submission from outside the module
 
 The active chat surface also publishes the current prompt/history snapshot on `space.chat`.
@@ -66,11 +67,13 @@ Key files:
 - `onscreen-agent.css`: shell, floating window, compact bubble, and overlay-local styling
 - `response-markdown.css`: markdown presentation for assistant responses
 - `view.js`: thread rendering wiring
-- `store.js`: display mode, drag, resize, send loop, queued follow-ups, and scroll behavior
+- `store.js`: display mode, drag, edge-hide peeking, resize, send loop, queued follow-ups, and scroll behavior
 
 The routed overlay anchors in `_core/router` are the supported place for floating routed UI. The overlay should not be hardwired directly into the router shell.
 
 The settings and prompt-history dialogs reuse the shared `_core/visual/forms/dialog.css` shell layout. Their header and footer rows stay fixed while only the settings body or prompt-history frame scrolls, so the footer actions remain reachable even when the content is long.
+
+Dragging the astronaut past any viewport edge now first hits a dead zone at the in-screen clamp that matches the reveal-threshold distance so corner placement stays practical, then snaps the shell into a hidden peeking pose on that edge after the pointer crosses that extra distance. In that state about 55 percent of the avatar remains in view, the astronaut keeps its normal left or right facing flip while also rotating by edge direction, the chat body collapses away, and a click or drag back past the reveal threshold restores the previous compact or full chat body.
 
 ## Prompt Files
 

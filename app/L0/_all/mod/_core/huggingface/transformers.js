@@ -1,1 +1,1 @@
-export * from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1";
+export * from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.0.0-next.7";

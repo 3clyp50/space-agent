@@ -2,8 +2,8 @@ import { normalizeHuggingFaceModelInput, normalizeMaxNewTokens } from "/mod/_cor
 import { WORKER_INBOUND, WORKER_OUTBOUND } from "/mod/_core/huggingface/protocol.js";
 
 let runtimeModulePromise = null;
+let generator = null;
 let tokenizer = null;
-let model = null;
 let currentGenerateRequestId = "";
 let currentLoadRequestId = "";
 let currentModelId = "";
@@ -14,21 +14,151 @@ function postMessageToHost(type, payload = {}) {
   self.postMessage({ payload, type });
 }
 
+function postTrace(stage, details = {}) {
+  postMessageToHost(WORKER_OUTBOUND.TRACE, {
+    currentDtype,
+    currentModelId,
+    stage,
+    timestamp: Date.now(),
+    ...details
+  });
+}
+
+function createWorkerError(message, extra = {}) {
+  const error = new Error(message);
+  Object.assign(error, extra);
+  return error;
+}
+
 function serializeError(error) {
   if (error instanceof Error) {
+    const { cause, code, message, name, stack, ...details } = error;
     return {
-      message: error.message,
-      stack: error.stack || ""
+      code: code ?? null,
+      details,
+      message,
+      name: name || "Error",
+      stack: stack || "",
+      cause: cause == null ? null : String(cause)
     };
   }
 
   return {
+    code: null,
+    details: {},
     message: String(error || "Unknown worker error"),
+    name: typeof error,
     stack: ""
   };
 }
 
+function logWorkerConsoleError(label, error, details = {}) {
+  forwardWorkerConsoleError(`[huggingface-worker] ${label}`, {
+    ...details,
+    serialized: serializeError(error)
+  }, error);
+  console.error(`[huggingface-worker] ${label}`, {
+    ...details,
+    serialized: serializeError(error)
+  }, error);
+}
+
+function serializeConsoleArg(value) {
+  if (value instanceof Error) {
+    return {
+      kind: "error",
+      value: serializeError(value)
+    };
+  }
+
+  if (value == null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return {
+      items: value.slice(0, 12).map((entry) => serializeConsoleArg(entry)),
+      kind: "array",
+      length: value.length
+    };
+  }
+
+  if (typeof value === "object") {
+    const summary = {
+      kind: value.constructor?.name || "object"
+    };
+
+    if ("message" in value && value.message != null) {
+      summary.message = String(value.message);
+    }
+
+    if ("name" in value && value.name != null) {
+      summary.name = String(value.name);
+    }
+
+    if ("type" in value && value.type != null) {
+      summary.type = String(value.type);
+    }
+
+    if ("reason" in value && value.reason != null) {
+      summary.reason = serializeConsoleArg(value.reason);
+    }
+
+    if ("filename" in value && value.filename != null) {
+      summary.filename = String(value.filename);
+    }
+
+    if ("lineno" in value && value.lineno != null) {
+      summary.lineno = Number(value.lineno);
+    }
+
+    if ("colno" in value && value.colno != null) {
+      summary.colno = Number(value.colno);
+    }
+
+    const ownEntries = Object.entries(value).slice(0, 12);
+    if (ownEntries.length) {
+      summary.entries = Object.fromEntries(
+        ownEntries.map(([key, entryValue]) => [key, serializeConsoleArg(entryValue)])
+      );
+    }
+
+    return summary;
+  }
+
+  return String(value);
+}
+
+function forwardWorkerConsoleError(...args) {
+  try {
+    postMessageToHost(WORKER_OUTBOUND.CONSOLE_ERROR, {
+      args: args.map((arg) => serializeConsoleArg(arg)),
+      currentDtype,
+      currentModelId,
+      loadRequestId: currentLoadRequestId,
+      timestamp: Date.now()
+    });
+  } catch {
+    // Do not let logging failures mask the original worker error.
+  }
+}
+
+function postWorkerError(type, error, details = {}) {
+  const requestId = String(details.requestId || crypto.randomUUID());
+  logWorkerConsoleError(type, error, details);
+  postMessageToHost(type, {
+    error: serializeError(error),
+    requestId
+  });
+}
+
 function normalizeProgressValue(report = {}) {
+  const loaded = Number(report.loaded);
+  const total = Number(report.total);
+  if (Number.isFinite(loaded) && Number.isFinite(total) && total > 0) {
+    return Math.max(0, Math.min(1, loaded / total));
+  }
+
   const directProgress = Number(report.progress);
   if (Number.isFinite(directProgress) && directProgress > 1) {
     return Math.max(0, Math.min(1, directProgress / 100));
@@ -36,12 +166,6 @@ function normalizeProgressValue(report = {}) {
 
   if (Number.isFinite(directProgress) && directProgress >= 0) {
     return Math.max(0, Math.min(1, directProgress));
-  }
-
-  const loaded = Number(report.loaded);
-  const total = Number(report.total);
-  if (Number.isFinite(loaded) && Number.isFinite(total) && total > 0) {
-    return Math.max(0, Math.min(1, loaded / total));
   }
 
   return 0;
@@ -254,13 +378,16 @@ async function handleLoadModel(payload = {}) {
   const requestId = String(payload.requestId || crypto.randomUUID());
 
   if (currentGenerateRequestId) {
-    postMessageToHost(WORKER_OUTBOUND.LOAD_ERROR, {
-      error: {
-        message: "Stop the current generation before loading another model.",
-        stack: ""
-      },
-      requestId
-    });
+    postWorkerError(
+      WORKER_OUTBOUND.LOAD_ERROR,
+      createWorkerError("Stop the current generation before loading another model."),
+      {
+        activeModelId: currentModelId,
+        dtype: payload.dtype,
+        modelInput: payload.modelInput,
+        requestId
+      }
+    );
     return;
   }
 
@@ -268,25 +395,38 @@ async function handleLoadModel(payload = {}) {
   const dtype = String(payload.dtype || "").trim() || "q4";
 
   if (!modelId) {
-    postMessageToHost(WORKER_OUTBOUND.LOAD_ERROR, {
-      error: {
-        message: "Enter a Hugging Face model id or Hub URL.",
-        stack: ""
-      },
-      requestId
-    });
+    postWorkerError(
+      WORKER_OUTBOUND.LOAD_ERROR,
+      createWorkerError("Enter a Hugging Face model id or Hub URL."),
+      {
+        dtype,
+        modelInput: payload.modelInput,
+        requestId
+      }
+    );
     return;
   }
 
   currentLoadRequestId = requestId;
+  generator = null;
   tokenizer = null;
-  model = null;
   currentModelId = "";
   currentDtype = "";
 
   try {
+    postTrace("load:start", {
+      dtype,
+      modelId,
+      requestId
+    });
+    postTrace("runtime-import:start", {
+      requestId
+    });
     const runtimeModule = await ensureRuntimeModule();
-    const { AutoModelForCausalLM, AutoTokenizer } = runtimeModule;
+    postTrace("runtime-import:done", {
+      requestId
+    });
+    const { pipeline } = runtimeModule;
     const progress_callback = (report) => {
       if (currentLoadRequestId !== requestId) {
         return;
@@ -307,13 +447,20 @@ async function handleLoadModel(payload = {}) {
       });
     };
 
-    tokenizer = await AutoTokenizer.from_pretrained(modelId, {
-      progress_callback
+    postTrace("pipeline-load:start", {
+      modelId,
+      requestId
     });
-    model = await AutoModelForCausalLM.from_pretrained(modelId, {
+    generator = await pipeline("text-generation", modelId, {
       device: "webgpu",
       dtype,
       progress_callback
+    });
+    tokenizer = generator?.tokenizer || null;
+    postTrace("pipeline-load:done", {
+      dtype,
+      modelId,
+      requestId
     });
 
     if (currentLoadRequestId !== requestId) {
@@ -328,14 +475,16 @@ async function handleLoadModel(payload = {}) {
       modelId,
       requestId
     });
+    return;
   } catch (error) {
+    generator = null;
     tokenizer = null;
-    model = null;
     currentModelId = "";
     currentDtype = "";
 
-    postMessageToHost(WORKER_OUTBOUND.LOAD_ERROR, {
-      error: serializeError(error),
+    postWorkerError(WORKER_OUTBOUND.LOAD_ERROR, error, {
+      dtype,
+      modelId,
       requestId
     });
   } finally {
@@ -346,36 +495,40 @@ async function handleLoadModel(payload = {}) {
 async function handleRunChat(payload = {}) {
   const requestId = String(payload.requestId || crypto.randomUUID());
 
-  if (!tokenizer || !model || !currentModelId) {
-    postMessageToHost(WORKER_OUTBOUND.CHAT_ERROR, {
-      error: {
-        message: "Load a model before sending a chat message.",
-        stack: ""
-      },
-      requestId
-    });
+  if (!tokenizer || !generator || !currentModelId) {
+    postWorkerError(
+      WORKER_OUTBOUND.CHAT_ERROR,
+      createWorkerError("Load a model before sending a chat message."),
+      {
+        activeModelId: currentModelId,
+        messageCount: Array.isArray(payload.messages) ? payload.messages.length : 0,
+        requestId
+      }
+    );
     return;
   }
 
   if (currentLoadRequestId) {
-    postMessageToHost(WORKER_OUTBOUND.CHAT_ERROR, {
-      error: {
-        message: "Wait for the current model load to finish before sending a message.",
-        stack: ""
-      },
-      requestId
-    });
+    postWorkerError(
+      WORKER_OUTBOUND.CHAT_ERROR,
+      createWorkerError("Wait for the current model load to finish before sending a message."),
+      {
+        activeModelId: currentModelId,
+        requestId
+      }
+    );
     return;
   }
 
   if (currentGenerateRequestId) {
-    postMessageToHost(WORKER_OUTBOUND.CHAT_ERROR, {
-      error: {
-        message: "A generation is already running.",
-        stack: ""
-      },
-      requestId
-    });
+    postWorkerError(
+      WORKER_OUTBOUND.CHAT_ERROR,
+      createWorkerError("A generation is already running."),
+      {
+        activeModelId: currentModelId,
+        requestId
+      }
+    );
     return;
   }
 
@@ -384,7 +537,7 @@ async function handleRunChat(payload = {}) {
   try {
     const runtimeModule = await ensureRuntimeModule();
     const { StoppingCriteria, TextStreamer } = runtimeModule;
-    const { inputs, promptTokenCount } = await prepareInputs(payload.messages);
+    const { promptTokenCount } = await prepareInputs(payload.messages);
     const startedAt = performance.now();
     let timeToFirstTokenMs = null;
     let streamedText = "";
@@ -434,25 +587,24 @@ async function handleRunChat(payload = {}) {
       });
     });
 
-    const outputs = await model.generate({
-      ...inputs,
+    const outputs = await generator(payload.messages, {
+      do_sample: false,
       max_new_tokens: normalizeMaxNewTokens(payload.maxNewTokens),
       stopping_criteria: stoppingCriteria,
       streamer
     });
 
-    const fullSequenceIds = extractFirstSequence(outputs);
-    const completionIds = promptTokenCount > 0
-      ? fullSequenceIds.slice(promptTokenCount)
-      : fullSequenceIds;
-    const decodedText = completionIds.length
-      ? (tokenizer.batch_decode([completionIds], {
-        skip_special_tokens: true
-      })?.[0] || "")
-      : streamedText;
+    const generatedResult = Array.isArray(outputs) ? outputs[0] : outputs;
+    const generatedTextPayload = generatedResult?.generated_text;
+    const decodedText = Array.isArray(generatedTextPayload)
+      ? String(generatedTextPayload.at(-1)?.content || "")
+      : String(generatedTextPayload || streamedText || "");
     const endToEndLatencySeconds = Math.max(performance.now() - startedAt, 0) / 1000;
     const decodeLatencySeconds = Math.max(endToEndLatencySeconds - ((timeToFirstTokenMs || 0) / 1000), 0);
-    const completionTokens = completionIds.length;
+    const completionTokenIds = await tokenizer(decodedText || streamedText || "", {
+      return_dict: true
+    });
+    const completionTokens = extractFirstSequenceLength(completionTokenIds?.input_ids);
     const tokensPerSecond = completionTokens > 0 && decodeLatencySeconds > 0
       ? completionTokens / decodeLatencySeconds
       : null;
@@ -471,9 +623,11 @@ async function handleRunChat(payload = {}) {
       requestId,
       text: decodedText || streamedText || ""
     });
+    return;
   } catch (error) {
-    postMessageToHost(WORKER_OUTBOUND.CHAT_ERROR, {
-      error: serializeError(error),
+    postWorkerError(WORKER_OUTBOUND.CHAT_ERROR, error, {
+      activeModelId: currentModelId,
+      messageCount: Array.isArray(payload.messages) ? payload.messages.length : 0,
       requestId
     });
   } finally {
@@ -493,11 +647,10 @@ function handleInterrupt(payload = {}) {
   });
 }
 
-self.addEventListener("message", (event) => {
-  const message = event.data || {};
-
+export function handleWorkerMessage(message = {}) {
   switch (message.type) {
     case WORKER_INBOUND.BOOT: {
+      postTrace("worker:boot", {});
       postMessageToHost(WORKER_OUTBOUND.READY, {
         webgpuSupported: Boolean(self.navigator?.gpu)
       });
@@ -518,4 +671,20 @@ self.addEventListener("message", (event) => {
     default:
       break;
   }
+}
+
+self.addEventListener("error", (event) => {
+  console.error("[huggingface-worker] Unhandled worker error", {
+    colno: event.colno,
+    error: event.error ? serializeError(event.error) : null,
+    filename: event.filename,
+    lineno: event.lineno,
+    message: event.message
+  }, event.error);
+});
+
+self.addEventListener("unhandledrejection", (event) => {
+  console.error("[huggingface-worker] Unhandled rejection", {
+    reason: serializeError(event.reason)
+  }, event.reason);
 });

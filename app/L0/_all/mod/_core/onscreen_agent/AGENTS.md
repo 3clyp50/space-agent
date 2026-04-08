@@ -46,14 +46,14 @@ This module owns:
 - `ext/js/_core/onscreen_agent/llm.js/buildOnscreenAgentExampleMessages/end/*.js`: prompt-example extensions that prepend live few-shot conversations ahead of thread history
 - `panel.html`: overlay UI
 - `response-markdown.css`: overlay-local markdown presentation overrides for assistant responses
-- `store.js`: floating-shell state, send loop, persistence, avatar drag behavior, history resize behavior, display mode, and overlay menus
+- `store.js`: floating-shell state, send loop, persistence, avatar drag behavior, edge-hide peeking state, history resize behavior, display mode, and overlay menus
 - `view.js`: shared-thread-view wiring
 - `skills.js`: onscreen skill discovery, skill frontmatter metadata flags, `space.skills.load(...)`, and skill-related JS extension seams
 - `llm.js`, `api.js`, `execution.js`, `attachments.js`, and `llm-params.js`: local runtime helpers
 - `llm.js` owns LLM-facing system-prompt file loading, optional example-message construction, always-loaded skill injection into the system prompt, runtime system-prompt assembly, prompt-instance caching, separate transient-message construction, final request assembly, history-compaction prompt loading, and the model-facing JS extension seams
 - `api.js` owns chat transport, HTTP error handling, and streaming response parsing; prompt-shaping logic lives in `llm.js`
 - `llm-params.js` delegates YAML parsing to the shared framework `js/yaml-lite.js` utility but still enforces the overlay-specific top-level `key: value` params contract
-- `config.js` and `storage.js`: persisted settings, position, display mode, and history
+- `config.js` and `storage.js`: persisted settings, position, optional edge-hidden pose, display mode, and history
 - `prompts/`: shipped prompt files and prompt-local documentation
 - `res/`: overlay-local assets
 - the `space.onscreenAgent` runtime namespace for overlay display control and externally triggered prompt submission
@@ -72,6 +72,7 @@ Current config fields include:
 - optional `custom_system_prompt`
 - `agent_x`
 - `agent_y`
+- optional `hidden_edge`
 - optional `history_height`
 - `display_mode`
 
@@ -79,7 +80,7 @@ Legacy compatibility:
 
 - `display_mode` is the canonical persisted mode field
 - `storage.js` still accepts legacy `collapsed` values when older configs are loaded
-- `storage.js` also normalizes numeric coordinate scalars from the lightweight YAML parser before the overlay store applies `agent_x` and `agent_y`
+- `storage.js` also normalizes numeric coordinate scalars from the lightweight YAML parser before the overlay store applies `agent_x` and `agent_y`, and it normalizes `hidden_edge` through the shared config helper before the store trusts the peeking state
 - when config is rewritten, legacy `collapsed` is mirrored from `display_mode` so the two fields do not drift
 
 Current defaults:
@@ -169,8 +170,8 @@ Current runtime namespace:
 - `store.js` also registers `space.onscreenAgent`
 - `store.js` also publishes the active overlay thread snapshot at `space.chat`, including `messages`, live `attachments` helpers for the current surface, and a non-persisted `transient` registry for mutable prompt context blocks that should be emitted as a separate trailing prepared `_____transient` message
 - prepared user messages with attachments should append one compact helper block that uses `Chat runtime access↓` for the runtime-access notes and `Attachments↓` before the attachment rows, so multiline helper data is visibly framed as continuing below each label
-- `space.onscreenAgent.show(options?)` opens the overlay without submitting a prompt and preserves the current display mode unless `options.mode` explicitly requests compact or full
-- `space.onscreenAgent.submitPrompt(promptText, options?)` opens the overlay, seeds the composer, and submits or queues the prompt through the owned send loop while preserving the current display mode unless `options.mode` explicitly requests compact or full
+- `space.onscreenAgent.show(options?)` opens the overlay, first reveals any persisted edge-hidden peeking pose back to the in-screen threshold position, and preserves the current display mode unless `options.mode` explicitly requests compact or full
+- `space.onscreenAgent.submitPrompt(promptText, options?)` opens the overlay, first reveals any persisted edge-hidden peeking pose back to the in-screen threshold position, seeds the composer, and submits or queues the prompt through the owned send loop while preserving the current display mode unless `options.mode` explicitly requests compact or full
 
 Current `processOnscreenAgentMessage` phases:
 
@@ -188,8 +189,10 @@ Current overlay behavior:
 
 - the module mounts only through the router overlay seam at `page/router/overlay/end`
 - the shell supports compact and full display modes
-- avatar drag positioning, action menus, history-edge resizing, and visibility recovery are owned by `store.js`
-- `panel.html` passes `shell`, `avatar`, panel, thread, and dialog refs into `store.js`; the store uses those refs to clamp the saved position against the current viewport and to detect when the astronaut has drifted fully off-screen
+- avatar drag positioning, edge-hide peeking, action menus, history-edge resizing, and visibility recovery are owned by `store.js`
+- `panel.html` passes `shell`, `avatar`, panel, thread, and dialog refs into `store.js`; the store uses those refs to clamp the saved position against the current viewport, to keep edge-hidden poses snapped with roughly 55 percent of the astronaut still visible, and to detect when the astronaut has drifted too far to recover cleanly
+- dragging the avatar past the left, right, top, or bottom viewport edge should first hit a dead zone at the in-screen clamp that matches the reveal-threshold distance so corner placement stays possible, then snap the shell into a persisted `hidden_edge` pose after the pointer crosses that dead zone; the astronaut rotates clockwise on the left edge, counterclockwise on the right edge, upside down on the top edge, and upright on the bottom edge, and the chat body collapses until the avatar is revealed again
+- while hidden on an edge, dragging should keep the astronaut attached to that edge until the pointer crosses back past the in-screen reveal threshold; a click on the hidden astronaut should slide it back to that threshold position and restore the previously active compact or full chat body
 - the full-mode history subtree mounts only in full mode; compact mode does not keep a history container mounted
 - the full-mode history uses a non-scrolling outer shell for placement, chrome, and the resize grip, with an inner scroller that owns thread overflow
 - in full mode, the history panel can be resized vertically from a full-width invisible handle that straddles the outer top or bottom border based on orientation, while a centered grip marks the draggable edge and the chosen height persists in config
@@ -197,7 +200,7 @@ Current overlay behavior:
 - when full mode mounts or the viewport changes, the store keeps the raw persisted history height instead of rewriting it to the current viewport fit; the rendered height is clamped against the currently available space on that side so reloads preserve the chosen size while smaller screens still fit
 - the compact and full composer panels accept attachments from either the file picker or direct file drag-and-drop onto the chat box
 - keyboard submit from the composer textarea and the form submit path may send a new message or queue a follow-up draft, but they must never trigger `requestStop()`; stopping the active loop stays an explicit primary-button click only
-- saved `agent_x`, `agent_y`, and `display_mode` are loaded during init before prompt startup continues, and the floating shell stays unmounted until that startup config load has resolved so refreshes never flash the default bottom-left position before the stored coordinates are applied
+- saved `agent_x`, `agent_y`, optional `hidden_edge`, and `display_mode` are loaded during init before prompt startup continues, and the floating shell stays unmounted until that startup config load has resolved so refreshes never flash the default bottom-left position before the stored coordinates and peeking state are applied
 - the first shell paint should ease in with a short reveal once startup positioning is ready, but avoid ancestor opacity fades on the shell itself because they break the backdrop blur used by the history and composer surfaces
 - internal startup statuses such as prompt bootstrapping may gate controls, but they should not replace the composer placeholder because they are not user-relevant; user-visible errors and action results should still surface through `status`
 - when the persisted LLM settings still match the shipped defaults and the API key is blank, the composer blocks the full textarea area with a blurred overlay and centered `Set API key` action until credentials are configured

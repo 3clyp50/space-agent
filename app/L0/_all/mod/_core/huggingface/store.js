@@ -22,6 +22,35 @@ import { WORKER_INBOUND, WORKER_OUTBOUND } from "/mod/_core/huggingface/protocol
 const PERSISTED_MODEL_STORAGE_KEY = "space.huggingface.last-loaded-model";
 const SAVED_MODELS_STORAGE_KEY = "space.huggingface.saved-models";
 
+function logHuggingFaceConsoleError(label, details = {}, raw = null) {
+  if (raw != null) {
+    console.error(`[huggingface] ${label}`, details, raw);
+    return;
+  }
+
+  console.error(`[huggingface] ${label}`, details);
+}
+
+function teardownDeadWorker(store, workerInstance) {
+  if (store.worker !== workerInstance) {
+    return;
+  }
+
+  try {
+    workerInstance.terminate();
+  } catch {
+    // Ignore termination failures on already-dead workers.
+  }
+
+  store.worker = null;
+  store.isWorkerReady = false;
+  store.isLoadingModel = false;
+  store.pendingLoadRequestId = "";
+  store.queuedLoadSelection = null;
+  store.loadingModelLabel = "";
+  store.resetProgress();
+}
+
 function updateMessageById(messages, messageId, updater) {
   return messages.map((message) => {
     if (message.id !== messageId) {
@@ -119,6 +148,7 @@ const model = {
   isStopRequested: false,
   isWorkerReady: false,
   lastUsageMetrics: null,
+  lastWorkerTraceStage: "",
   loadProgress: {
     file: "",
     progress: 0,
@@ -257,6 +287,7 @@ const model = {
     this.isLoadingModel = false;
     this.isStopRequested = false;
     this.isWorkerReady = false;
+    this.lastWorkerTraceStage = "";
     this.loadingModelLabel = "";
     this.pendingAssistantMessageId = "";
     this.pendingGenerateRequestId = "";
@@ -270,7 +301,7 @@ const model = {
       return;
     }
 
-    const worker = new Worker(new URL("./huggingface-worker.js", import.meta.url), {
+    const worker = new Worker(new URL("./huggingface-worker-bootstrap.js", import.meta.url), {
       type: "module"
     });
 
@@ -278,8 +309,31 @@ const model = {
       this.handleWorkerMessage(event.data);
     });
     worker.addEventListener("error", (event) => {
-      this.error = event.message || "The Hugging Face worker failed to start.";
+      logHuggingFaceConsoleError("Worker error", {
+        colno: event.colno,
+        error: event.error,
+        filename: event.filename,
+        isTrusted: event.isTrusted,
+        lastWorkerTraceStage: this.lastWorkerTraceStage,
+        lineno: event.lineno,
+        message: event.message,
+        type: event.type
+      }, event);
+      teardownDeadWorker(this, worker);
+      this.error = event.message
+        || (this.lastWorkerTraceStage
+          ? `The Hugging Face worker crashed during ${this.lastWorkerTraceStage}. Inspect the console for the raw worker event and trace logs.`
+          : "The Hugging Face worker failed before exposing a useful error message. Inspect the raw worker ErrorEvent in the console.");
       this.statusText = "Worker startup failed.";
+    });
+    worker.addEventListener("messageerror", (event) => {
+      logHuggingFaceConsoleError("Worker message error", {
+        data: event.data,
+        isTrusted: event.isTrusted,
+        origin: event.origin,
+        type: event.type
+      }, event);
+      teardownDeadWorker(this, worker);
     });
 
     this.worker = worker;
@@ -384,6 +438,29 @@ const model = {
         break;
       }
 
+      case WORKER_OUTBOUND.CONSOLE_ERROR: {
+        logHuggingFaceConsoleError("Forwarded worker console.error", {
+          args: Array.isArray(payload.args) ? payload.args : [],
+          currentDtype: payload.currentDtype,
+          currentModelId: payload.currentModelId,
+          loadRequestId: payload.loadRequestId,
+          timestamp: payload.timestamp
+        });
+        break;
+      }
+
+      case WORKER_OUTBOUND.TRACE: {
+        this.lastWorkerTraceStage = String(payload.stage || "");
+        console.log("[huggingface] Worker trace", {
+          currentDtype: payload.currentDtype,
+          currentModelId: payload.currentModelId,
+          requestId: payload.requestId,
+          stage: payload.stage,
+          timestamp: payload.timestamp
+        });
+        break;
+      }
+
       case WORKER_OUTBOUND.LOAD_COMPLETE: {
         if (payload.requestId !== this.pendingLoadRequestId) {
           return;
@@ -414,6 +491,14 @@ const model = {
           return;
         }
 
+        logHuggingFaceConsoleError("Model load failed", {
+          activeModelId: this.activeModelId,
+          error: payload.error,
+          loadProgress: this.loadProgress,
+          modelInput: this.modelInput,
+          requestId: payload.requestId,
+          selectedDtype: this.selectedDtype
+        });
         this.isLoadingModel = false;
         this.pendingLoadRequestId = "";
         this.loadingModelLabel = "";
@@ -478,6 +563,13 @@ const model = {
           return;
         }
 
+        logHuggingFaceConsoleError("Chat generation failed", {
+          activeModelId: this.activeModelId,
+          error: payload.error,
+          messageCount: this.messages.length,
+          requestId: payload.requestId,
+          systemPromptLength: String(this.systemPrompt || "").length
+        });
         if (this.pendingAssistantMessageId) {
           this.messages = updateMessageById(this.messages, this.pendingAssistantMessageId, (messageRecord) => ({
             ...messageRecord,

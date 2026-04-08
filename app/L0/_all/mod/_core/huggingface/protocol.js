@@ -9,9 +9,11 @@ export const WORKER_OUTBOUND = {
   CHAT_COMPLETE: "chat-complete",
   CHAT_DELTA: "chat-delta",
   CHAT_ERROR: "chat-error",
+  CONSOLE_ERROR: "console-error",
   INTERRUPT_ACK: "interrupt-ack",
   LOAD_COMPLETE: "load-complete",
   LOAD_ERROR: "load-error",
   LOAD_PROGRESS: "load-progress",
-  READY: "ready"
+  READY: "ready",
+  TRACE: "trace"
 };

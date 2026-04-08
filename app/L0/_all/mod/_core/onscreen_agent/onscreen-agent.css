@@ -81,6 +81,15 @@
   position: fixed;
   pointer-events: none;
   animation: onscreen-agent-shell-settle-in 180ms ease-out both;
+  --onscreen-agent-avatar-edge-rotate: 0deg;
+  --onscreen-agent-avatar-face-scale-x: 1;
+  transition:
+    left var(--onscreen-agent-side-shift-duration) var(--onscreen-agent-side-shift-ease),
+    top var(--onscreen-agent-side-shift-duration) var(--onscreen-agent-side-shift-ease);
+}
+
+.onscreen-agent-shell.is-dragging {
+  transition: none;
 }
 
 @keyframes onscreen-agent-shell-settle-in {
@@ -441,7 +450,7 @@
   place-items: center;
   width: 100%;
   height: 100%;
-  transform: scaleX(1);
+  transform: rotate(var(--onscreen-agent-avatar-edge-rotate)) scaleX(var(--onscreen-agent-avatar-face-scale-x));
   transform-origin: center;
   transition: transform var(--onscreen-agent-side-shift-duration) var(--onscreen-agent-side-shift-ease);
   will-change: transform;
@@ -457,8 +466,28 @@
     drop-shadow(0 0 16px rgba(148, 188, 255, 0.14));
 }
 
-.onscreen-agent-shell.is-right .onscreen-agent-avatar-flip {
-  transform: scaleX(-1);
+.onscreen-agent-shell.is-right {
+  --onscreen-agent-avatar-face-scale-x: -1;
+}
+
+.onscreen-agent-shell.is-edge-hidden .onscreen-agent-avatar-orbit {
+  animation: none;
+}
+
+.onscreen-agent-shell.is-edge-hidden-left {
+  --onscreen-agent-avatar-edge-rotate: 90deg;
+}
+
+.onscreen-agent-shell.is-edge-hidden-right {
+  --onscreen-agent-avatar-edge-rotate: -90deg;
+}
+
+.onscreen-agent-shell.is-edge-hidden-top {
+  --onscreen-agent-avatar-edge-rotate: 180deg;
+}
+
+.onscreen-agent-shell.is-edge-hidden-bottom {
+  --onscreen-agent-avatar-edge-rotate: 0deg;
 }
 
 .onscreen-agent-body {
@@ -467,12 +496,16 @@
   bottom: 0;
   width: var(--onscreen-agent-panel-width);
   --onscreen-agent-body-shift-y: 0px;
+  --onscreen-agent-body-scale: 1;
+  opacity: 1;
   transform: translate3d(
     calc(var(--onscreen-agent-avatar-size) + var(--onscreen-agent-gap)),
     var(--onscreen-agent-body-shift-y),
     0
-  );
+  ) scale(var(--onscreen-agent-body-scale));
+  transform-origin: left bottom;
   transition:
+    opacity var(--onscreen-agent-mode-transition-duration) var(--onscreen-agent-mode-transition-ease),
     transform var(--onscreen-agent-side-shift-duration) var(--onscreen-agent-side-shift-ease),
     width var(--onscreen-agent-mode-transition-duration) var(--onscreen-agent-mode-transition-ease);
   will-change: transform, width;
@@ -480,6 +513,7 @@
 
 .onscreen-agent-shell.is-right .onscreen-agent-body {
   transform: translate3d(calc(-100% - var(--onscreen-agent-gap)), var(--onscreen-agent-body-shift-y), 0);
+  transform-origin: right bottom;
 }
 
 .onscreen-agent-shell.is-compact .onscreen-agent-body {
@@ -488,6 +522,18 @@
 
 .onscreen-agent-shell.is-full.is-history-below .onscreen-agent-body {
   --onscreen-agent-body-shift-y: calc(100% - var(--onscreen-agent-avatar-size));
+}
+
+.onscreen-agent-shell.is-right .onscreen-agent-body,
+.onscreen-agent-shell.is-right.is-full.is-history-below .onscreen-agent-body {
+  transform: translate3d(calc(-100% - var(--onscreen-agent-gap)), var(--onscreen-agent-body-shift-y), 0)
+    scale(var(--onscreen-agent-body-scale));
+}
+
+.onscreen-agent-shell.is-edge-hidden .onscreen-agent-body {
+  --onscreen-agent-body-scale: 0.72;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .onscreen-agent-panel {
@@ -847,11 +893,13 @@
 @media (prefers-reduced-motion: reduce) {
   .onscreen-agent-shell {
     animation: none;
+    transition: none;
   }
 
   .onscreen-agent-history-shell,
   .onscreen-agent-body,
-  .onscreen-agent-panel {
+  .onscreen-agent-panel,
+  .onscreen-agent-avatar-flip {
     animation: none;
     transition: none;
   }

@@ -24,6 +24,15 @@ const DISPLAY_MODE_FULL = "full";
 const DISPLAY_MODE_COMPACT = "compact";
 const DISPLAY_MODE_TRANSITION_DURATION_MS = 260;
 const DRAG_CLICK_THRESHOLD = 6;
+const HIDDEN_EDGE_BOTTOM = config.ONSCREEN_AGENT_HIDDEN_EDGE.BOTTOM;
+const HIDDEN_EDGE_LEFT = config.ONSCREEN_AGENT_HIDDEN_EDGE.LEFT;
+const HIDDEN_EDGE_RIGHT = config.ONSCREEN_AGENT_HIDDEN_EDGE.RIGHT;
+const HIDDEN_EDGE_TOP = config.ONSCREEN_AGENT_HIDDEN_EDGE.TOP;
+const HIDDEN_EDGE_REVEAL_THRESHOLD_MIN_PX = 8;
+const HIDDEN_EDGE_SNAP_DEAD_ZONE_MIN_PX = 4;
+const HIDDEN_EDGE_VISIBLE_RATIO = 0.55;
+const HIDDEN_EDGE_OFFSCREEN_RATIO = 1 - HIDDEN_EDGE_VISIBLE_RATIO;
+const HIDDEN_EDGE_REVEAL_THRESHOLD_RATIO = 0.17;
 const HISTORY_MIN_HEIGHT_PX = 80;
 const HISTORY_OFFSET_PX = 12;
 const MAX_COMPACT_TRIM_ATTEMPTS = 4;
@@ -923,6 +932,7 @@ const model = {
   systemPromptDraft: "",
   agentX: null,
   agentY: null,
+  hiddenEdge: "",
 
   get composerPlaceholder() {
     const statusText = typeof this.status === "string" ? this.status.trim() : "";
@@ -1156,6 +1166,14 @@ const model = {
     return this.displayModeTransitionPhase === "collapsing";
   },
 
+  get isEdgeHidden() {
+    return Boolean(this.hiddenEdge);
+  },
+
+  get isDraggingAgent() {
+    return Boolean(this.dragState);
+  },
+
   get promptHistoryUserMessageIndexes() {
     if (!Array.isArray(this.promptHistoryMessages) || !this.promptHistoryMessages.length) {
       return [];
@@ -1260,6 +1278,10 @@ const model = {
   },
 
   get avatarButtonLabel() {
+    if (this.hiddenEdge) {
+      return "Reveal agent chat";
+    }
+
     return this.isFullMode ? "Switch to compact chat mode" : "Switch to full chat mode";
   },
 
@@ -1294,6 +1316,103 @@ const model = {
     }
 
     return DEFAULT_AVATAR_SIZE_PX;
+  },
+
+  getHiddenEdgeVisibleInset() {
+    return Math.max(1, Math.round(this.getAvatarSize() * HIDDEN_EDGE_VISIBLE_RATIO));
+  },
+
+  getHiddenEdgeHiddenOffset() {
+    return Math.max(1, Math.round(this.getAvatarSize() * HIDDEN_EDGE_OFFSCREEN_RATIO));
+  },
+
+  getHiddenEdgeRevealThreshold() {
+    return Math.max(HIDDEN_EDGE_REVEAL_THRESHOLD_MIN_PX, Math.round(this.getAvatarSize() * HIDDEN_EDGE_REVEAL_THRESHOLD_RATIO));
+  },
+
+  getHiddenEdgeSnapDeadZone() {
+    return Math.max(HIDDEN_EDGE_SNAP_DEAD_ZONE_MIN_PX, this.getHiddenEdgeRevealThreshold());
+  },
+
+  getHiddenEdgeOverflow(x, y) {
+    const normalizedX = Math.round(Number(x) || 0);
+    const normalizedY = Math.round(Number(y) || 0);
+    const avatarSize = this.getAvatarSize();
+
+    return {
+      [HIDDEN_EDGE_LEFT]: Math.max(0, -normalizedX),
+      [HIDDEN_EDGE_RIGHT]: Math.max(0, normalizedX + avatarSize - this.getViewportWidth()),
+      [HIDDEN_EDGE_TOP]: Math.max(0, -normalizedY),
+      [HIDDEN_EDGE_BOTTOM]: Math.max(0, normalizedY + avatarSize - this.getViewportHeight())
+    };
+  },
+
+  getHiddenEdgeForPosition(x, y, options = {}) {
+    const normalizedX = Math.round(Number(x) || 0);
+    const normalizedY = Math.round(Number(y) || 0);
+    const currentHiddenEdge = config.normalizeOnscreenAgentHiddenEdge(options.currentHiddenEdge ?? this.hiddenEdge);
+    const avatarSize = this.getAvatarSize();
+    const revealThreshold = this.getHiddenEdgeRevealThreshold();
+
+    if (currentHiddenEdge) {
+      if (
+        (currentHiddenEdge === HIDDEN_EDGE_LEFT && normalizedX >= revealThreshold) ||
+        (currentHiddenEdge === HIDDEN_EDGE_RIGHT &&
+          normalizedX <= this.getViewportWidth() - avatarSize - revealThreshold) ||
+        (currentHiddenEdge === HIDDEN_EDGE_TOP && normalizedY >= revealThreshold) ||
+        (currentHiddenEdge === HIDDEN_EDGE_BOTTOM &&
+          normalizedY <= this.getViewportHeight() - avatarSize - revealThreshold)
+      ) {
+        return "";
+      }
+
+      const overflow = this.getHiddenEdgeOverflow(normalizedX, normalizedY);
+      const nextOverflowEntry = Object.entries(overflow).sort((left, right) => right[1] - left[1])[0];
+
+      if (!nextOverflowEntry || nextOverflowEntry[1] <= 0) {
+        return currentHiddenEdge;
+      }
+
+      return nextOverflowEntry[0];
+    }
+
+    const overflow = this.getHiddenEdgeOverflow(normalizedX, normalizedY);
+    const nextOverflowEntry = Object.entries(overflow).sort((left, right) => right[1] - left[1])[0];
+    const snapDeadZone = this.getHiddenEdgeSnapDeadZone();
+
+    if (!nextOverflowEntry || nextOverflowEntry[1] <= snapDeadZone) {
+      return "";
+    }
+
+    return nextOverflowEntry[0];
+  },
+
+  getRevealedPositionForHiddenEdge(hiddenEdge = this.hiddenEdge) {
+    const normalizedHiddenEdge = config.normalizeOnscreenAgentHiddenEdge(hiddenEdge);
+    const fallbackPosition = this.getDefaultPosition();
+    const revealThreshold = this.getHiddenEdgeRevealThreshold();
+    const avatarSize = this.getAvatarSize();
+    let x = Number.isFinite(this.agentX) ? this.agentX : fallbackPosition.x;
+    let y = Number.isFinite(this.agentY) ? this.agentY : fallbackPosition.y;
+
+    switch (normalizedHiddenEdge) {
+      case HIDDEN_EDGE_LEFT:
+        x = revealThreshold;
+        break;
+      case HIDDEN_EDGE_RIGHT:
+        x = this.getViewportWidth() - avatarSize - revealThreshold;
+        break;
+      case HIDDEN_EDGE_TOP:
+        y = revealThreshold;
+        break;
+      case HIDDEN_EDGE_BOTTOM:
+        y = this.getViewportHeight() - avatarSize - revealThreshold;
+        break;
+      default:
+        break;
+    }
+
+    return this.clampPosition(x, y);
   },
 
   getDefaultPosition() {
@@ -1385,14 +1504,49 @@ const model = {
     return Math.min(this.getMaxResizableHistoryHeight(), Math.max(HISTORY_MIN_HEIGHT_PX, normalizedValue));
   },
 
-  clampPosition(x, y) {
+  clampPosition(x, y, options = {}) {
+    const normalizedHiddenEdge = config.normalizeOnscreenAgentHiddenEdge(options.hiddenEdge);
+    const normalizedX = Math.round(Number(x) || 0);
+    const normalizedY = Math.round(Number(y) || 0);
     const avatarSize = this.getAvatarSize();
+    const hiddenVisibleInset = this.getHiddenEdgeVisibleInset();
+    const hiddenOffset = this.getHiddenEdgeHiddenOffset();
     const maxX = Math.max(POSITION_MARGIN, this.getViewportWidth() - avatarSize - POSITION_MARGIN);
     const maxY = Math.max(POSITION_MARGIN, this.getViewportHeight() - avatarSize - POSITION_MARGIN);
+    const clampVisibleX = (value) => Math.min(maxX, Math.max(POSITION_MARGIN, value));
+    const clampVisibleY = (value) => Math.min(maxY, Math.max(POSITION_MARGIN, value));
+
+    if (normalizedHiddenEdge === HIDDEN_EDGE_LEFT) {
+      return {
+        x: -hiddenOffset,
+        y: clampVisibleY(normalizedY)
+      };
+    }
+
+    if (normalizedHiddenEdge === HIDDEN_EDGE_RIGHT) {
+      return {
+        x: this.getViewportWidth() - hiddenVisibleInset,
+        y: clampVisibleY(normalizedY)
+      };
+    }
+
+    if (normalizedHiddenEdge === HIDDEN_EDGE_TOP) {
+      return {
+        x: clampVisibleX(normalizedX),
+        y: -hiddenOffset
+      };
+    }
+
+    if (normalizedHiddenEdge === HIDDEN_EDGE_BOTTOM) {
+      return {
+        x: clampVisibleX(normalizedX),
+        y: this.getViewportHeight() - hiddenVisibleInset
+      };
+    }
 
     return {
-      x: Math.min(maxX, Math.max(POSITION_MARGIN, Math.round(Number(x) || 0))),
-      y: Math.min(maxY, Math.max(POSITION_MARGIN, Math.round(Number(y) || 0)))
+      x: clampVisibleX(normalizedX),
+      y: clampVisibleY(normalizedY)
     };
   },
 
@@ -1424,9 +1578,28 @@ const model = {
   },
 
   setPosition(x, y, options = {}) {
-    const position = this.clampPosition(x, y);
+    const normalizedHiddenEdge = config.normalizeOnscreenAgentHiddenEdge(
+      options.hiddenEdge === undefined ? this.hiddenEdge : options.hiddenEdge
+    );
+    const position = this.clampPosition(x, y, {
+      hiddenEdge: normalizedHiddenEdge
+    });
+    const hiddenEdgeChanged = normalizedHiddenEdge !== this.hiddenEdge;
+
     this.agentX = position.x;
     this.agentY = position.y;
+    this.hiddenEdge = normalizedHiddenEdge;
+
+    if (hiddenEdgeChanged) {
+      this.closeComposerActionMenu();
+
+      if (normalizedHiddenEdge) {
+        this.dismissUiBubble({
+          clearActive: true
+        });
+        this.refs.input?.blur?.();
+      }
+    }
 
     if (options.persist !== false) {
       this.scheduleConfigPersist();
@@ -1435,10 +1608,17 @@ const model = {
 
   ensurePosition(options = {}) {
     let moved = false;
+    const normalizedHiddenEdge = config.normalizeOnscreenAgentHiddenEdge(this.hiddenEdge);
+    this.hiddenEdge = normalizedHiddenEdge;
 
-    if (typeof this.agentX !== "number" || !Number.isFinite(this.agentX) || typeof this.agentY !== "number" || !Number.isFinite(this.agentY)) {
+    if (
+      (typeof this.agentX !== "number" || !Number.isFinite(this.agentX)) &&
+      (typeof this.agentY !== "number" || !Number.isFinite(this.agentY))
+    ) {
       const defaultPosition = this.getDefaultPosition();
-      const clampedDefaultPosition = this.clampPosition(defaultPosition.x, defaultPosition.y);
+      const clampedDefaultPosition = this.clampPosition(defaultPosition.x, defaultPosition.y, {
+        hiddenEdge: normalizedHiddenEdge
+      });
       this.agentX = clampedDefaultPosition.x;
       this.agentY = clampedDefaultPosition.y;
       moved = true;
@@ -1454,7 +1634,14 @@ const model = {
       return moved;
     }
 
-    const position = this.clampPosition(this.agentX, this.agentY);
+    const fallbackPosition = this.getDefaultPosition();
+    const position = this.clampPosition(
+      Number.isFinite(this.agentX) ? this.agentX : fallbackPosition.x,
+      Number.isFinite(this.agentY) ? this.agentY : fallbackPosition.y,
+      {
+        hiddenEdge: normalizedHiddenEdge
+      }
+    );
 
     if (position.x !== this.agentX || position.y !== this.agentY) {
       this.agentX = position.x;
@@ -1463,8 +1650,9 @@ const model = {
     }
 
     if (!moved && options.ensureVisible !== false && this.isAvatarVisible() === false) {
-      const fallbackPosition = this.getDefaultPosition();
-      const defaultPosition = this.clampPosition(fallbackPosition.x, fallbackPosition.y);
+      const defaultPosition = this.clampPosition(fallbackPosition.x, fallbackPosition.y, {
+        hiddenEdge: normalizedHiddenEdge
+      });
 
       if (defaultPosition.x !== this.agentX || defaultPosition.y !== this.agentY) {
         this.agentX = defaultPosition.x;
@@ -1484,6 +1672,30 @@ const model = {
     return moved;
   },
 
+  revealHiddenEdge(options = {}) {
+    const normalizedHiddenEdge = config.normalizeOnscreenAgentHiddenEdge(options.hiddenEdge ?? this.hiddenEdge);
+
+    if (!normalizedHiddenEdge) {
+      return false;
+    }
+
+    const revealedPosition = this.getRevealedPositionForHiddenEdge(normalizedHiddenEdge);
+    this.hiddenEdge = "";
+    this.agentX = revealedPosition.x;
+    this.agentY = revealedPosition.y;
+    this.closeComposerActionMenu();
+
+    if (options.persist !== false) {
+      this.scheduleConfigPersist();
+    }
+
+    if (options.reflow === true) {
+      this.reflowOverlayLayout(options);
+    }
+
+    return true;
+  },
+
   scheduleConfigPersist() {
     if (this.configPersistTimer) {
       window.clearTimeout(this.configPersistTimer);
@@ -1501,6 +1713,7 @@ const model = {
         agentX: this.agentX,
         agentY: this.agentY,
         displayMode: this.displayMode,
+        hiddenEdge: this.hiddenEdge,
         historyHeight: this.historyHeight,
         settings: this.settings,
         systemPrompt: this.systemPrompt
@@ -1613,7 +1826,7 @@ const model = {
     this.interactionHintTimer = window.setTimeout(() => {
       this.interactionHintTimer = 0;
 
-      if (this.hasInteracted || !this.isCompactMode || this.dragState?.moved === true) {
+      if (this.hasInteracted || !this.isCompactMode || this.hiddenEdge || this.dragState?.moved === true) {
         return;
       }
 
@@ -1622,6 +1835,10 @@ const model = {
   },
 
   showUiBubble(text, hideAfterMs = 0) {
+    if (this.hiddenEdge) {
+      return null;
+    }
+
     const normalizedText = normalizeUiBubbleText(text);
 
     if (!normalizedText.trim()) {
@@ -1936,6 +2153,7 @@ const model = {
         this.systemPromptDraft = storedConfig.systemPrompt;
         this.agentX = storedConfig.agentX;
         this.agentY = storedConfig.agentY;
+        this.hiddenEdge = config.normalizeOnscreenAgentHiddenEdge(storedConfig.hiddenEdge);
         this.displayMode = normalizeDisplayMode(storedConfig.displayMode);
         this.historyHeight = config.normalizeOnscreenAgentHistoryHeight(storedConfig.historyHeight);
         await this.replaceHistory(storedHistory.map((message) => normalizeStoredMessage(message)), {
@@ -2197,7 +2415,9 @@ const model = {
 
     this.cleanupHistoryResize();
     this.closeComposerActionMenu();
-    this.recordInteraction();
+    this.recordInteraction({
+      hideBubble: true
+    });
 
     const target = event.currentTarget;
 
@@ -2237,7 +2457,14 @@ const model = {
       this.dragState.moved = true;
     }
 
+    const nextX = this.dragState.originX + deltaX;
+    const nextY = this.dragState.originY + deltaY;
+    const nextHiddenEdge = this.getHiddenEdgeForPosition(nextX, nextY, {
+      currentHiddenEdge: this.hiddenEdge
+    });
+
     this.setPosition(this.dragState.originX + deltaX, this.dragState.originY + deltaY, {
+      hiddenEdge: nextHiddenEdge,
       persist: false
     });
   },
@@ -2252,6 +2479,15 @@ const model = {
 
     if (wasDrag) {
       this.scheduleConfigPersist();
+      return;
+    }
+
+    if (this.hiddenEdge) {
+      this.revealHiddenEdge({
+        persist: true,
+        reflow: true
+      });
+      this.focusInput();
       return;
     }
 
@@ -2343,6 +2579,10 @@ const model = {
     const shouldFocusInput = options.focusInput !== false;
     const modeChanged = normalizedMode !== this.displayMode;
     const shouldScrollToLatestOnRender = normalizedMode === DISPLAY_MODE_FULL && previousMode !== DISPLAY_MODE_FULL;
+    const revealedHiddenEdge = this.revealHiddenEdge({
+      persist: shouldPersist,
+      reflow: false
+    });
 
     this.displayMode = normalizedMode;
     this.startDisplayModeTransition(
@@ -2354,7 +2594,7 @@ const model = {
     );
     this.closeComposerActionMenu();
 
-    if (shouldPersist && modeChanged) {
+    if (shouldPersist && modeChanged && !revealedHiddenEdge) {
       this.scheduleConfigPersist();
     }
 
@@ -2543,7 +2783,7 @@ const model = {
   focusInput() {
     const input = this.refs.input;
 
-    if (!input || input.disabled) {
+    if (!input || input.disabled || this.hiddenEdge) {
       return;
     }
 

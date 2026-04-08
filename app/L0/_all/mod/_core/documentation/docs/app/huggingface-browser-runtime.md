@@ -50,9 +50,19 @@ The ownership split is:
 
 - `view.html` mounts the route shell and binds to the Alpine store
 - `store.js` owns UI state, local persistence, saved-model memory, worker lifecycle, and streamed message updates
+- `huggingface-worker-bootstrap.js` is the tiny startup wrapper that imports the heavy runtime worker and catches import/startup failures
 - `huggingface-worker.js` owns the Transformers.js import, model downloads, generation, streaming, and interruption
 - `protocol.js` holds the stable message names between the page and the worker
 - `transformers.js` pins the external browser import so the worker references one local module path instead of embedding the CDN URL inline
+
+For debugging, both layers log failures aggressively:
+
+- the worker logs caught load/chat failures, unhandled worker errors, and unhandled rejections through `console.error`
+- the page store also logs inbound load/chat failure payloads and raw worker startup/message error events through `console.error`
+- worker `console.error` calls are forwarded back across the worker protocol as structured payloads, so runtime logs can still be inspected from the page console even when the browser reports only an opaque worker crash
+- the worker also emits explicit trace markers for major load phases such as runtime import and pipeline load; when the browser only reports a bare worker `error` event, the page can still report the last known phase
+- when a worker dies during startup, the page clears the dead worker instance and queued load state so a later retry can spawn a fresh worker instead of remaining stuck in `Queued`
+- the bootstrap worker exists specifically so heavy worker import/startup failures can be surfaced as at least one explicit trace/log payload before the browser falls back to a generic worker `error` event
 
 The store may terminate and recreate the worker to stop an in-flight model download or to unload the currently loaded model. That keeps the runtime route-local and disposable.
 
@@ -65,7 +75,7 @@ Users load one model at a time by entering either:
 
 The helper layer normalizes Hub URLs back to repo ids before the worker loads them.
 
-The worker uses Transformers.js browser APIs on `device: "webgpu"`. The route keeps the current stable browser pin in `transformers.js`; as of April 8, 2026, the official docs page labels `main` as source-install-only and points normal npm/browser installs at stable `v3.8.1`, so this route pins that stable browser import instead of an unpinned preview build.
+The worker uses Transformers.js browser APIs on `device: "webgpu"` through the high-level `pipeline("text-generation", ...)` path, matching the current Hugging Face model-card examples for browser chat models. The route keeps the browser pin in `transformers.js`; as of April 8, 2026, the official installation docs show the CDN example on `@huggingface/transformers@4.0.0-next.7`, so this route pins that explicit preview build instead of the older `v3.8.1` browser import.
 
 Important model constraint:
 
@@ -86,13 +96,14 @@ Current behavior:
 - later loads may reuse whatever the browser-side Transformers.js cache already retained
 - the route does not expose cache scanning or cache deletion because Transformers.js does not expose the same model-catalog and cache-management surface that WebLLM does in `_core/webllm`
 - the current-model panel shows the active asset or phase under the progress bar, with the best available bytes-transferred or percent detail appended, because the underlying progress callback reports multiple per-file steps rather than one stable global download percentage
+- when the callback includes byte counts, the bar fill itself is driven from `loaded / total` so it matches the visible step detail instead of a looser generic progress value
 
 ## Chat Flow
 
 The chat flow is intentionally minimal:
 
 1. the store builds a plain message list from the system prompt plus prior user/assistant turns
-2. the worker prepares either a chat-template input or a plain fallback prompt when the tokenizer lacks a usable chat template
+2. the worker computes prompt-token counts from either a chat template or a plain fallback prompt when the tokenizer lacks a usable chat template
 3. generation streams partial text back into the current assistant message
 4. stop uses a worker-owned stopping-criteria gate so generation can end cleanly with `finishReason: "abort"`
 5. when generation ends, the worker sends the final text plus measured metrics

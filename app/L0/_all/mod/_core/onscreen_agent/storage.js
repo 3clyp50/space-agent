@@ -33,6 +33,7 @@ function createDefaultConfig() {
     systemPrompt: "",
     agentX: null,
     agentY: null,
+    hiddenEdge: "",
     historyHeight: null,
     displayMode: DISPLAY_MODE_COMPACT
   };
@@ -73,6 +74,7 @@ function normalizeStoredConfig(parsedConfig) {
     storedConfig.max_tokens ?? storedConfig.maxTokens ?? config.DEFAULT_ONSCREEN_AGENT_SETTINGS.maxTokens;
   const rawX = storedConfig.agent_x ?? storedConfig.agentX;
   const rawY = storedConfig.agent_y ?? storedConfig.agentY;
+  const rawHiddenEdge = storedConfig.hidden_edge ?? storedConfig.hiddenEdge;
   const rawHistoryHeight = storedConfig.history_height ?? storedConfig.historyHeight;
   const storedDisplayMode = normalizeDisplayMode(storedConfig.display_mode ?? storedConfig.displayMode);
   const legacyDisplayMode =
@@ -99,14 +101,16 @@ function normalizeStoredConfig(parsedConfig) {
     ).trim(),
     agentX: normalizeStoredCoordinate(rawX),
     agentY: normalizeStoredCoordinate(rawY),
+    hiddenEdge: config.normalizeOnscreenAgentHiddenEdge(rawHiddenEdge),
     historyHeight: config.normalizeOnscreenAgentHistoryHeight(rawHistoryHeight),
     displayMode: storedDisplayMode || legacyDisplayMode || DISPLAY_MODE_COMPACT
   };
 }
 
-function buildStoredConfigPayload({ settings, systemPrompt, agentX, agentY, historyHeight, displayMode }) {
+function buildStoredConfigPayload({ settings, systemPrompt, agentX, agentY, hiddenEdge, historyHeight, displayMode }) {
   const normalizedSystemPrompt = typeof systemPrompt === "string" ? systemPrompt.trim() : "";
   const normalizedDisplayMode = normalizeDisplayMode(displayMode) || DISPLAY_MODE_COMPACT;
+  const normalizedHiddenEdge = config.normalizeOnscreenAgentHiddenEdge(hiddenEdge);
   const normalizedHistoryHeight = config.normalizeOnscreenAgentHistoryHeight(historyHeight);
   const payload = {
     api_endpoint: String(settings?.apiEndpoint || config.DEFAULT_ONSCREEN_AGENT_SETTINGS.apiEndpoint || "").trim(),
@@ -124,6 +128,10 @@ function buildStoredConfigPayload({ settings, systemPrompt, agentX, agentY, hist
 
   if (typeof agentY === "number" && Number.isFinite(agentY)) {
     payload.agent_y = Math.round(agentY);
+  }
+
+  if (normalizedHiddenEdge) {
+    payload.hidden_edge = normalizedHiddenEdge;
   }
 
   if (normalizedHistoryHeight !== null) {

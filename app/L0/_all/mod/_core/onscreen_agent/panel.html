@@ -12,6 +12,12 @@
           class="onscreen-agent-shell"
           :class="{
             'is-compact': $store.onscreenAgent.isCompactMode,
+            'is-dragging': $store.onscreenAgent.isDraggingAgent,
+            'is-edge-hidden': $store.onscreenAgent.isEdgeHidden,
+            'is-edge-hidden-bottom': $store.onscreenAgent.hiddenEdge === 'bottom',
+            'is-edge-hidden-left': $store.onscreenAgent.hiddenEdge === 'left',
+            'is-edge-hidden-right': $store.onscreenAgent.hiddenEdge === 'right',
+            'is-edge-hidden-top': $store.onscreenAgent.hiddenEdge === 'top',
             'is-full': $store.onscreenAgent.isFullMode,
             'is-history-below': $store.onscreenAgent.isHistoryBelow,
             'is-mode-collapsing': $store.onscreenAgent.isModeTransitionCollapsing,

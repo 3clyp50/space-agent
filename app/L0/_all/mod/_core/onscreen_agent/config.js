@@ -1,6 +1,12 @@
 export const ONSCREEN_AGENT_CONFIG_PATH = "~/conf/onscreen-agent.yaml";
 export const ONSCREEN_AGENT_HISTORY_PATH = "~/hist/onscreen-agent.json";
 export const DEFAULT_ONSCREEN_AGENT_MAX_TOKENS = 64_000;
+export const ONSCREEN_AGENT_HIDDEN_EDGE = Object.freeze({
+  BOTTOM: "bottom",
+  LEFT: "left",
+  RIGHT: "right",
+  TOP: "top"
+});
 
 export const DEFAULT_ONSCREEN_AGENT_SETTINGS = {
   apiEndpoint: "https://openrouter.ai/api/v1/chat/completions",
@@ -36,6 +42,18 @@ export function normalizeOnscreenAgentHistoryHeight(value) {
   }
 
   return Math.round(parsedValue);
+}
+
+export function normalizeOnscreenAgentHiddenEdge(value) {
+  switch (value) {
+    case ONSCREEN_AGENT_HIDDEN_EDGE.LEFT:
+    case ONSCREEN_AGENT_HIDDEN_EDGE.RIGHT:
+    case ONSCREEN_AGENT_HIDDEN_EDGE.TOP:
+    case ONSCREEN_AGENT_HIDDEN_EDGE.BOTTOM:
+      return value;
+    default:
+      return "";
+  }
 }
 
 function normalizeMaxTokensText(value) {
