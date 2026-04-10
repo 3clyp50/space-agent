@@ -44,7 +44,7 @@ The page owns:
 - a simple testing chat with system prompt, user messages, streamed assistant replies, stop, and clear-chat
 - compact response metrics inline under each assistant reply
 
-When the browser has no saved local Hugging Face models and no persisted auto-reload target, the routed testing-page model input prefills `onnx-community/gemma-4-E4B-it-ONNX` as the empty-state suggestion. Admin and onscreen chat local settings reuse that same default when their selected model is blank, no model is loaded, and the shared saved-model list is empty. The default generation cap is `16384` max new tokens unless the user changes it.
+When admin or onscreen chat local settings have no selected model and the browser has saved Hugging Face models, the shared sidebar preselects the browser-wide last successfully loaded saved model from local storage. If that entry was discarded, it falls back to the first saved model. When the browser has no saved local Hugging Face models and no persisted auto-reload target, the routed testing-page model input prefills `onnx-community/gemma-4-E4B-it-ONNX` as the empty-state suggestion; admin and onscreen chat local settings reuse that same default only when there is no preferred saved-model selection. The default generation cap is `16384` max new tokens unless the user changes it.
 
 This is not a general agent surface. It does not expose tool execution, queueing, attachments, persisted conversations, or backend orchestration.
 
@@ -130,6 +130,7 @@ Current behavior:
 - saved-model rows now include a discard button that deletes matching Hugging Face repo responses from the browser Cache API and removes the affected saved-model entries from local storage
 - saved-model row actions stay enabled while the route is idle; only real model transitions or an in-flight discard should disable them
 - because the browser cache is repo-scoped while the saved-model list is keyed by model id plus dtype, discarding one entry may also prune other saved entries for the same repo id
+- the last successfully loaded saved-model config is browser-wide local storage, not app-file user preference, and admin or onscreen local-provider drafts use it only as the default preselection when their draft model is blank
 - the same `config-sidebar.html` file also has `admin` and `onscreen` modes used inside the chat settings modals, where it renders a direct repo-id input, dtype selector, saved-model shortcuts, current-model status, live load action or progress, and a button that opens the full Hugging Face testing chat route against the shared manager state
 
 ## Chat Flow

@@ -69,6 +69,7 @@ Rules:
 
 - do not import `extensions.js` from feature modules just to reach `space.extend`; use `globalThis.space.extend(...)`
 - do not publish the runtime into `parent`, `top`, or sibling frames
+- `css/index.css` installs the app-wide border-box sizing baseline; modules may rely on `width: 100%` including padding and borders unless they explicitly opt an element back into content-box sizing
 - if bootstrap order changes, update this doc and `/app/AGENTS.md`
 - shell-level one-time setup that must run before feature modules mount, such as analytics bootstrap or `document.head` tag installation, should prefer the shared `_core/framework/initializer.js/initialize/end` JS hook instead of page-shell edits
 - same-origin `/` and `/admin` URLs opened with `_blank` from framework-backed pages are handled centrally by `js/new-window.js`: normal left-clicks on `target="_blank"` links and `window.open(..., "_blank")` receive the current tab's `/enter` access in the child window before navigation, while context-menu opens, middle-clicks, and modifier-key opens are not intercepted and still route through `/enter`

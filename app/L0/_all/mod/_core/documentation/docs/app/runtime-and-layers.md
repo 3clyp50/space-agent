@@ -29,6 +29,7 @@ Important shell facts:
 - page shells may inject `meta[name="space-config"]` values for runtime params marked `frontend_exposed`
 - `/login` and `/enter` are special recovery-safe shells that do not depend on authenticated `/mod/...` assets
 - same-origin `/` and `/admin` URLs opened from framework-backed pages through normal `target="_blank"` link clicks or `window.open(..., "_blank")` receive the current tab's `/enter` access marker before navigation; manual browser opens are left to the `/enter` guard
+- authenticated framework-backed shells load `_core/framework/css/index.css`, which sets an app-wide border-box sizing baseline so reusable module cards, rows, and form controls do not overflow merely because they combine `width: 100%` with padding or borders
 
 ## Layer Model
 

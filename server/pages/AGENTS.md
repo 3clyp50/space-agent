@@ -47,7 +47,9 @@ Current public shell assets:
 - owns the login flow, guest creation flow, and pre-auth layout
 - reads injected `meta[name="space-config"]` tags directly so guest-login UI can follow backend runtime parameters without authenticated module imports
 - grants same-tab launcher access in `sessionStorage` after successful password sign-in so the tab that just authenticated can land on `/` while fresh tabs still route through `/enter`
+- renders the guest-account removal warning with yellow warning treatment and a recovery-safe inline Google Material Symbols warning icon, without depending on authenticated icon fonts
 - keeps the self-host call-to-action visually separated from the sign-in form even when guest account creation is disabled and the guest-only block is hidden
+- opens the self-host call-to-action as a simple login-styled modal with two recovery-safe inline-icon actions: a combined Mac/Windows/Linux download link to the `agent0ai/space-agent` latest-release redirect, and a server-hosting link to the README `#host` section
 - keeps the mobile shell scrollable when the viewport is shorter than the content, and reserves extra small-screen side spacing for the intro column rather than inflating the login card
 - keeps login-specific styling and motion local
 

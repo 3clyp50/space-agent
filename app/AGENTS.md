@@ -120,7 +120,7 @@ Current major first-party modules under `app/L0/_all/mod/_core/`:
 - `onscreen_menu/`: top-right routed shell menu extension, Home shortcut to the empty default route, and `_core/onscreen_menu/items` feature-item seam
 - `skillset/`: first-party reusable onscreen skill packs plus browser helper scripts that those skills import through stable `/mod/...` paths
 - `webllm/`: unlisted routed browser-only WebLLM test surface with a module-local worker, vendored browser runtime, compact searchable prebuilt model loading, expert-only compiled custom model loading, and simple throughput reporting
-- `huggingface/`: dashboard-listed Local LLM page backed by a routed browser-only Hugging Face Transformers.js test surface, with a module-local singleton runtime manager and worker, direct Hub model loading, a vendored local browser runtime for upstream testing, shared saved-model state reused by the admin and onscreen agents in the same browser context, and simple throughput reporting
+- `huggingface/`: dashboard-listed Local LLM page backed by a routed browser-only Hugging Face Transformers.js test surface, with a module-local singleton runtime manager and worker, direct Hub model loading, a vendored local browser runtime for upstream testing, shared saved-model state and browser-wide last-loaded selection reused by the admin and onscreen agents in the same browser context, and simple throughput reporting
 - `time_travel/`: routed writable-layer history surface that defaults to the authenticated user's local Git commits, can switch to write-accessible `L1` or `L2` history repositories through a permission-aware picker, filters by changed file, opens per-file diffs, and calls the server rollback or revert APIs after explicit confirmation
 - `dashboard/`, `dashboard_welcome/`, `spaces/`, and the `space/` compatibility shim: current routed feature surfaces and dashboard-injected surfaces under the router
 
@@ -168,6 +168,7 @@ Current entry anchors:
 Default composition guidance:
 
 - keep page shells small
+- framework CSS establishes border-box sizing across authenticated app shells, so reusable modules should treat `width: 100%` as including padding and borders unless they explicitly opt out
 - mount real features through thin `ext/html/...` adapter files
 - let the owning module expose the next seam
 - add explicit extension points when downstream customization is realistic

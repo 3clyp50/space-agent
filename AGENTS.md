@@ -154,7 +154,7 @@ Project concepts:
 - `node space serve` to run the server directly
 - `npm run install:packaging` to install packaging-only dependencies
 - `npm run desktop:dev`, `npm run desktop:pack`, and `npm run desktop:dist` for the Electron host and packaging flow
-- `.github/workflows/release-desktop.yml` builds tagged desktop releases for Windows, macOS, and Linux on both x64 and arm64, but only when the pushed tag points at `main` HEAD; it generates release notes automatically from commits through the OpenRouter helper flow, rebuilds fresh desktop artifacts for every tagged release, and publishes GitHub Release artifacts that the packaged Electron updater downloads directly
+- `.github/workflows/release-desktop.yml` builds tagged desktop releases for Windows, macOS, and Linux on both x64 and arm64; automatic runs start only from pushed `v*` tags whose tag commit points at `main` HEAD, manual `workflow_dispatch` reruns accept an existing Git tag on `main` history, and every publish updates the GitHub Release for that tag before uploading clobbered artifacts that the packaged Electron updater downloads directly
 
 ## Documentation System
 

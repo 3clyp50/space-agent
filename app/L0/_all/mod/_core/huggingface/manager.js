@@ -284,6 +284,38 @@ function readPersistedModelSelection() {
   }
 }
 
+function normalizeSavedModelEntries(entries = []) {
+  return (Array.isArray(entries) ? entries : [])
+    .map((entry) => createSavedModelEntry(entry))
+    .filter(Boolean);
+}
+
+function findSavedModelEntry(entries = [], selection = {}) {
+  const modelId = normalizeHuggingFaceModelInput(selection.modelId || selection.modelInput);
+  const dtype = String(selection.dtype || "").trim();
+
+  if (!modelId || !dtype) {
+    return null;
+  }
+
+  return entries.find((entry) => entry.modelId === modelId && entry.dtype === dtype) || null;
+}
+
+function selectPreferredSavedModel(entries = []) {
+  const savedModels = normalizeSavedModelEntries(entries);
+
+  if (!savedModels.length) {
+    return null;
+  }
+
+  const persistedSelection = readPersistedModelSelection();
+  const persistedSavedModel = persistedSelection
+    ? findSavedModelEntry(savedModels, persistedSelection)
+    : null;
+
+  return persistedSavedModel || savedModels[0] || null;
+}
+
 function persistModelSelection(selection) {
   try {
     if (!selection) {
@@ -426,6 +458,10 @@ class HuggingFaceManager {
     this.setState({
       maxNewTokens: value
     });
+  }
+
+  getPreferredSavedModelSelection() {
+    return cloneValue(selectPreferredSavedModel(this.state.savedModels));
   }
 
   awaitAbortablePromise(promise, signal, onAbort, message = "The operation was aborted.") {
@@ -1080,6 +1116,12 @@ class HuggingFaceManager {
       && this.state.activeDtype === selection.dtype
       && !this.state.isLoadingModel
     ) {
+      persistModelSelection({
+        dtype: selection.dtype,
+        maxNewTokens: normalizeMaxNewTokens(selection.maxNewTokens),
+        modelId: selection.modelId,
+        modelInput: selection.modelInput || selection.modelId
+      });
       this.setState(updateSelectionState({
         ...this.state,
         error: ""
@@ -1241,6 +1283,10 @@ class HuggingFaceManager {
     });
     this.ensureDefaultModelInput();
     return savedModels;
+  }
+
+  refreshPreferredSavedModelSelection() {
+    return cloneValue(selectPreferredSavedModel(this.refreshSavedModels()));
   }
 
   async discardSavedModel(entry = {}) {

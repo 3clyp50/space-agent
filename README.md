@@ -1,7 +1,5 @@
 <p align="center">
-  <a href="https://agent-zero.ai">
-    <img src="./server/pages/res/astronaut_no_bg.png" alt="Space Agent astronaut" width="300" />
-  </a>
+  <a href="https://space-agent.ai"><img src="./server/pages/res/astronaut_no_bg.png" alt="Space Agent astronaut" width="300" /></a>
 </p>
 
 <h1 align="center">Space Agent</h1>
@@ -11,17 +9,11 @@
 </p>
 
 <p align="center">
-  <a href="https://agent-zero.ai">
-    <img alt="Try Live Now!" height="46" src="https://img.shields.io/badge/Try%20Live%20Now%21-00D9FF?style=for-the-badge&labelColor=07111F&color=00D9FF" />
-  </a>
+  <a href="https://space-agent.ai"><img alt="Try Live Now!" height="64" src="https://img.shields.io/badge/Try%20Live%20Now%21-00D9FF?style=for-the-badge&labelColor=07111F&color=00D9FF" /></a>
   <br />
   <br />
-  <a href="https://github.com/agent0ai/space-agent/releases">
-    <img alt="Run locally via App" height="40" src="https://img.shields.io/badge/Run%20locally%20via%20App-59F0A8?style=for-the-badge&labelColor=07111F&color=59F0A8" />
-  </a>
-  <a href="#host-yourself-as-a-server">
-    <img alt="Host yourself as a server" height="40" src="https://img.shields.io/badge/Host%20yourself%20as%20a%20server-FFFFFF?style=for-the-badge&labelColor=07111F&color=FFFFFF" />
-  </a>
+  <a href="https://github.com/agent0ai/space-agent/releases/latest"><img alt="Run locally via App" height="50" src="https://img.shields.io/badge/Run%20locally%20via%20App-59F0A8?style=for-the-badge&labelColor=07111F&color=59F0A8" /></a>
+  <a href="#host"><img alt="Host yourself as a server" height="50" src="https://img.shields.io/badge/Host%20yourself%20as%20a%20server-FFFFFF?style=for-the-badge&labelColor=07111F&color=FFFFFF" /></a>
 </p>
 
 <p align="center">
@@ -33,12 +25,8 @@
 </p>
 
 <p align="center">
-  <a href="https://deepwiki.com/agent0ai/space-agent">
-    <img alt="Ask DeepWiki" src="https://deepwiki.com/badge.svg" />
-  </a>
-  <a href="https://github.com/agent0ai/space-agent/blob/main/LICENSE">
-    <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-59F0A8" />
-  </a>
+  <a href="https://deepwiki.com/agent0ai/space-agent"><img alt="Ask DeepWiki" src="https://deepwiki.com/badge.svg" /></a>
+  <a href="https://github.com/agent0ai/space-agent/blob/main/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-59F0A8" /></a>
   <img alt="Node.js 20+" src="https://img.shields.io/badge/node.js-20%2B-00D9FF" />
   <img alt="Runs in browser" src="https://img.shields.io/badge/runs%20in-the%20browser-FFFFFF" />
 </p>
@@ -137,7 +125,9 @@ For people building on it, the useful landmarks are:
 
 ### Run Locally Via App
 
-Download the latest desktop build from the [GitHub Releases page](https://github.com/agent0ai/space-agent/releases). The app starts the local runtime for you and opens Space Agent without making you manage a server by hand.
+Download the latest desktop build from the [GitHub Releases page](https://github.com/agent0ai/space-agent/releases/latest). The app starts the local runtime for you and opens Space Agent without making you manage a server by hand.
+
+<a id="host"></a>
 
 ### Host Yourself As A Server
 
@@ -213,9 +203,7 @@ Runtime settings live in [`commands/params.yaml`](./commands/params.yaml). For `
 Space Agent uses an `AGENTS.md` AI automated documentation hierarchy in cooperation with DeepWiki.
 
 <p>
-  <a href="https://deepwiki.com/agent0ai/space-agent">
-    <img alt="Ask DeepWiki" src="https://deepwiki.com/badge.svg" />
-  </a>
+  <a href="https://deepwiki.com/agent0ai/space-agent"><img alt="Ask DeepWiki" src="https://deepwiki.com/badge.svg" /></a>
 </p>
 
 The DeepWiki badge links to `https://deepwiki.com/agent0ai/space-agent` so DeepWiki can discover and index the project automatically.

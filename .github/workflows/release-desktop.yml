@@ -4,19 +4,25 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing Git v* tag to rebuild and publish
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-desktop-${{ github.ref }}
+  group: release-desktop-${{ github.event.inputs.release_tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
   prepare:
     runs-on: ubuntu-latest
     outputs:
-      should_release: ${{ steps.main_gate.outputs.should_release }}
+      should_release: ${{ steps.release_gate.outputs.should_release }}
       release_tag: ${{ steps.release_version.outputs.release_tag }}
       app_version: ${{ steps.release_version.outputs.app_version }}
       release_body: ${{ steps.release_notes.outputs.release_body }}
@@ -24,37 +30,82 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
 
-      - id: main_gate
+      - id: release_version
         shell: bash
+        env:
+          REQUESTED_RELEASE_TAG: ${{ github.event.inputs.release_tag || github.ref_name }}
         run: |
-          git fetch origin main --depth=1
+          release_json="$(node packaging/scripts/release-version.js "$REQUESTED_RELEASE_TAG" --json)"
+          echo "release_tag=$(node -e 'const value = JSON.parse(process.argv[1]); process.stdout.write(value.releaseTag);' "$release_json")" >> "$GITHUB_OUTPUT"
+          echo "app_version=$(node -e 'const value = JSON.parse(process.argv[1]); process.stdout.write(value.semver);' "$release_json")" >> "$GITHUB_OUTPUT"
 
-          if [ "$(git rev-parse origin/main)" = "$GITHUB_SHA" ]; then
+      - id: release_gate
+        shell: bash
+        env:
+          IS_MANUAL_RELEASE: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
+          RELEASE_TAG: ${{ steps.release_version.outputs.release_tag }}
+        run: |
+          git fetch --force origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/tags/*:refs/tags/*"
+
+          tag_ref="refs/tags/$RELEASE_TAG"
+          if ! git rev-parse --verify --quiet "$tag_ref^{commit}" >/dev/null; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping desktop release because tag $RELEASE_TAG does not exist." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          tag_commit="$(git rev-parse "$tag_ref^{commit}")"
+          main_commit="$(git rev-parse refs/remotes/origin/main^{commit})"
+
+          if [ "$IS_MANUAL_RELEASE" = "true" ]; then
+            if git merge-base --is-ancestor "$tag_commit" "$main_commit"; then
+              echo "should_release=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping manual desktop release because tag $RELEASE_TAG is not on origin/main history." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [ "$tag_commit" = "$main_commit" ]; then
             echo "should_release=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           echo "should_release=false" >> "$GITHUB_OUTPUT"
-          echo "Skipping desktop release because tag $GITHUB_REF_NAME does not point at origin/main HEAD." >> "$GITHUB_STEP_SUMMARY"
+          echo "Skipping desktop release because tag $RELEASE_TAG does not point at origin/main HEAD." >> "$GITHUB_STEP_SUMMARY"
 
-      - id: release_version
-        if: steps.main_gate.outputs.should_release == 'true'
+      - name: Check out release tag
+        if: steps.release_gate.outputs.should_release == 'true'
         shell: bash
-        run: |
-          release_json="$(node packaging/scripts/release-version.js "$GITHUB_REF_NAME" --json)"
-          echo "release_tag=$(node -e 'const value = JSON.parse(process.argv[1]); process.stdout.write(value.releaseTag);' "$release_json")" >> "$GITHUB_OUTPUT"
-          echo "app_version=$(node -e 'const value = JSON.parse(process.argv[1]); process.stdout.write(value.semver);' "$release_json")" >> "$GITHUB_OUTPUT"
+        env:
+          RELEASE_TAG: ${{ steps.release_version.outputs.release_tag }}
+        run: git checkout --detach "refs/tags/$RELEASE_TAG"
 
       - id: release_context
-        if: steps.main_gate.outputs.should_release == 'true'
+        if: steps.release_gate.outputs.should_release == 'true'
         uses: actions/github-script@v7
         env:
           RELEASE_TAG: ${{ steps.release_version.outputs.release_tag }}
         with:
           script: |
             const currentTag = process.env.RELEASE_TAG;
+            const { spawnSync } = require("node:child_process");
+
+            function gitSucceeds(args) {
+              return spawnSync("git", args, { stdio: "ignore" }).status === 0;
+            }
+
+            function tagCommitExists(tagName) {
+              return gitSucceeds(["rev-parse", "--verify", "--quiet", `refs/tags/${tagName}^{commit}`]);
+            }
+
             const releases = await github.paginate(github.rest.repos.listReleases, {
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -62,14 +113,27 @@ jobs:
             });
 
             const previousRelease = releases.find((release) => {
-              return !release.draft && !release.prerelease && release.tag_name !== currentTag;
+              const previousTag = release.tag_name;
+
+              return (
+                !release.draft &&
+                !release.prerelease &&
+                previousTag !== currentTag &&
+                tagCommitExists(previousTag) &&
+                gitSucceeds([
+                  "merge-base",
+                  "--is-ancestor",
+                  `refs/tags/${previousTag}^{commit}`,
+                  `refs/tags/${currentTag}^{commit}`
+                ])
+              );
             });
 
             core.setOutput("previous_tag", previousRelease?.tag_name || "");
             core.notice(`Building fresh desktop artifacts for ${currentTag}.`);
 
       - id: release_notes
-        if: steps.main_gate.outputs.should_release == 'true'
+        if: steps.release_gate.outputs.should_release == 'true'
         shell: bash
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -121,6 +185,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: refs/tags/${{ needs.prepare.outputs.release_tag }}
           fetch-depth: 0
 
       - uses: actions/setup-node@v4
@@ -175,6 +240,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ needs.prepare.outputs.release_tag }}
 
       - uses: actions/download-artifact@v4
         with:

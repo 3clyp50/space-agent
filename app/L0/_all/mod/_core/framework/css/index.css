@@ -1,5 +1,11 @@
 @import "./google-icons.css";
 
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 img {
   -webkit-user-drag: none;
   user-drag: none;

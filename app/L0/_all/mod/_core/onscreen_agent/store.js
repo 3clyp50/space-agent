@@ -2265,6 +2265,17 @@ const model = {
       return false;
     }
 
+    const preferredSavedModel = huggingfaceManager.refreshPreferredSavedModelSelection();
+
+    if (preferredSavedModel?.modelId && preferredSavedModel?.dtype) {
+      this.settingsDraft = {
+        ...this.settingsDraft,
+        huggingfaceDtype: preferredSavedModel.dtype,
+        huggingfaceModel: preferredSavedModel.modelId
+      };
+      return true;
+    }
+
     const snapshot = huggingfaceManager.getSnapshot();
     const hasSavedModels = Array.isArray(snapshot.savedModels) && snapshot.savedModels.length > 0;
     const activeModelId = normalizeHuggingFaceModelInput(snapshot.activeModelId || "");
@@ -2366,6 +2377,7 @@ const model = {
     }
 
     await this.refreshHuggingFaceCatalog();
+    this.prefillSettingsDraftDefaultHuggingFaceModel();
     return true;
   },
 
