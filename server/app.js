@@ -17,6 +17,7 @@ import { createWatchdog } from "./lib/file_watch/watchdog.js";
 import { createTmpWatch, ensureServerTmpDir } from "./lib/tmp/tmp_watch.js";
 import { loadProjectEnvFiles } from "./lib/utils/env_files.js";
 import { createRuntimeParams } from "./lib/utils/runtime_params.js";
+import { createLocalMutationSync } from "./runtime/request_mutations.js";
 import { sendJson } from "./router/responses.js";
 import { createRequestHandler } from "./router/router.js";
 
@@ -42,7 +43,7 @@ function resolveListeningPort(server, fallbackPort) {
   return fallbackPort;
 }
 
-async function createAgentServer(overrides = {}) {
+async function createServerBootstrap(overrides = {}) {
   const apiDir = overrides.apiDir || API_DIR;
   const appDir = overrides.appDir || APP_DIR;
   const assetDir = overrides.assetDir || ASSET_DIR;
@@ -81,6 +82,39 @@ async function createAgentServer(overrides = {}) {
   ensureCustomwareDirectories(projectRoot, runtimeParams);
   ensureServerTmpDir(tmpDir);
 
+  return {
+    apiDir,
+    appDir,
+    assetDir,
+    browserHost,
+    configuredPort,
+    host,
+    pagesDir,
+    projectRoot,
+    runtimeParams,
+    tmpDir
+  };
+}
+
+async function createAgentServer(overrides = {}) {
+  const bootstrap = overrides.serverBootstrap || (await createServerBootstrap(overrides));
+  const {
+    apiDir,
+    appDir,
+    assetDir,
+    browserHost,
+    configuredPort,
+    host,
+    pagesDir,
+    projectRoot,
+    runtimeParams,
+    tmpDir
+  } = bootstrap;
+  let activePort = configuredPort;
+  const normalizedWorkerNumber = Number.isFinite(Math.floor(Number(overrides.workerNumber)))
+    ? Math.floor(Number(overrides.workerNumber))
+    : 0;
+
   const watchdog =
     overrides.watchdog ||
     createWatchdog({
@@ -93,17 +127,43 @@ async function createAgentServer(overrides = {}) {
     createTmpWatch({
       tmpDir
     });
-  const auth = overrides.auth || createAuthService({ projectRoot, runtimeParams, watchdog });
+  const mutationSync = overrides.mutationSync || createLocalMutationSync(watchdog);
+  const stateSync =
+    overrides.stateSync ||
+    (watchdog && typeof watchdog.waitForVersion === "function"
+      ? {
+          getVersion() {
+            return Number(watchdog.getVersion?.() || 0);
+          },
+          waitForVersion(minVersion, options = {}) {
+            return watchdog.waitForVersion(minVersion, options);
+          }
+        }
+      : null);
+  const stateSystem =
+    overrides.stateSystem ||
+    (watchdog && typeof watchdog.getStateSystem === "function" ? watchdog.getStateSystem() : null);
+  const resolvedAuth =
+    overrides.auth ||
+    createAuthService({
+      projectRoot,
+      runtimeParams,
+      stateSystem,
+      watchdog
+    });
 
   const apiRegistry = await loadApiRegistry(apiDir);
   const requestHandler = createRequestHandler({
     apiDir,
     apiRegistry,
     appDir,
-    auth,
+    auth: resolvedAuth,
     assetDir,
+    mutationSync,
     pagesDir,
     runtimeParams,
+    stateSync,
+    workerNumber: normalizedWorkerNumber,
     watchdog,
     host,
     port: configuredPort,
@@ -134,10 +194,13 @@ async function createAgentServer(overrides = {}) {
     port: activePort,
     assetDir,
     pagesDir,
-    auth,
+    auth: resolvedAuth,
     tmpDir,
     tmpWatch,
     watchdog,
+    workerNumber: normalizedWorkerNumber,
+    stateSync,
+    stateSystem,
     runtimeParams,
     server,
     browserUrl: buildBrowserUrl(browserHost, activePort),
@@ -146,8 +209,8 @@ async function createAgentServer(overrides = {}) {
 
       try {
         await watchdog.start();
-        if (auth && typeof auth.initialize === "function") {
-          await auth.initialize();
+        if (resolvedAuth && typeof resolvedAuth.initialize === "function") {
+          await resolvedAuth.initialize();
         }
 
         return await new Promise((resolve, reject) => {
@@ -187,4 +250,4 @@ async function createAgentServer(overrides = {}) {
   return runtime;
 }
 
-export { createAgentServer };
+export { createAgentServer, createServerBootstrap };

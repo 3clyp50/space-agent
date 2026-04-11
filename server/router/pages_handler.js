@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { isSingleUserApp } from "../lib/utils/runtime_params.js";
+import { runTrackedMutation } from "../runtime/request_mutations.js";
 import { sendFile, sendJson, sendNotFound, sendRedirect } from "./responses.js";
 
 const LEGACY_ROUTE_REDIRECTS = new Map([
@@ -153,7 +154,9 @@ async function handleLogoutRequest(res, options = {}) {
       auth &&
       typeof auth.revokeSession === "function"
     ) {
-      await auth.revokeSession(requestContext.user.sessionToken, requestContext.user.username);
+      await runTrackedMutation(options, async () =>
+        auth.revokeSession(requestContext.user.sessionToken, requestContext.user.username)
+      );
     }
   } catch {
     sendJson(res, 500, {

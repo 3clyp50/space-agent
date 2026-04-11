@@ -13,6 +13,13 @@ import { handleModuleRequest } from "./mod_handler.js";
 import { handleAppFetchRequest } from "./app_fetch_handler.js";
 import { readParsedRequestBody } from "./request_body.js";
 import { resolveProjectVersion } from "../lib/utils/project_version.js";
+import {
+  STATE_VERSION_HEADER,
+  normalizeStateVersionHeaderValue
+} from "../runtime/state_system.js";
+
+const STATE_WORKER_HEADER = "Space-Worker";
+const STATE_VERSION_WAIT_TIMEOUT_MS = 1_000;
 
 function createParamsObject(searchParams) {
   const params = Object.create(null);
@@ -136,6 +143,67 @@ function ensureAuthenticatedOrRespond(res, requestContext, auth) {
   }
 }
 
+function installStateResponseHeaders(res, stateSync, workerNumber) {
+  const normalizedWorkerNumber = Math.floor(Number(workerNumber));
+
+  if (!stateSync || typeof stateSync.getVersion !== "function") {
+    if (!res.headersSent && Number.isFinite(normalizedWorkerNumber) && normalizedWorkerNumber >= 0) {
+      res.setHeader(STATE_WORKER_HEADER, String(normalizedWorkerNumber));
+    }
+
+    return;
+  }
+
+  const originalWriteHead = res.writeHead.bind(res);
+
+  res.writeHead = function patchedWriteHead(...args) {
+    if (!res.headersSent) {
+      res.setHeader(STATE_VERSION_HEADER, String(Number(stateSync.getVersion()) || 0));
+
+      if (Number.isFinite(normalizedWorkerNumber) && normalizedWorkerNumber >= 0) {
+        res.setHeader(STATE_WORKER_HEADER, String(normalizedWorkerNumber));
+      }
+    }
+
+    return originalWriteHead(...args);
+  };
+}
+
+async function waitForRequestedStateVersion(req, res, stateSync) {
+  if (!stateSync || typeof stateSync.waitForVersion !== "function") {
+    return true;
+  }
+
+  const requestedVersion = normalizeStateVersionHeaderValue(
+    req?.headers?.[String(STATE_VERSION_HEADER).toLowerCase()]
+  );
+
+  if (requestedVersion <= 0) {
+    return true;
+  }
+
+  const waitResult = await stateSync.waitForVersion(requestedVersion, {
+    timeoutMs: STATE_VERSION_WAIT_TIMEOUT_MS
+  });
+
+  if (waitResult?.satisfied) {
+    return true;
+  }
+
+  sendJson(
+    res,
+    503,
+    {
+      error: "Server state is still synchronizing. Retry the request."
+    },
+    {
+      "Retry-After": "0"
+    }
+  );
+
+  return false;
+}
+
 function createRequestHandler(options) {
   const {
     apiDir,
@@ -144,11 +212,14 @@ function createRequestHandler(options) {
     assetDir,
     auth,
     host,
+    mutationSync,
     pagesDir,
     port,
     projectVersion: providedProjectVersion,
     projectRoot,
     runtimeParams,
+    stateSync,
+    workerNumber,
     watchdog
   } = options;
   const projectVersion =
@@ -157,6 +228,12 @@ function createRequestHandler(options) {
       : String(providedProjectVersion || "");
 
   return async function requestHandler(req, res) {
+    installStateResponseHeaders(res, stateSync, workerNumber);
+
+    if (!(await waitForRequestedStateVersion(req, res, stateSync))) {
+      return;
+    }
+
     const requestUrl = new URL(req.url, `http://${req.headers.host || `${host}:${port}`}`);
     const requestContext = createRequestContext({
       auth,
@@ -191,6 +268,7 @@ function createRequestHandler(options) {
           assetDir,
           watchdog,
           host,
+          mutationSync,
           port,
           projectRoot,
           runtimeParams,
@@ -230,6 +308,7 @@ function createRequestHandler(options) {
 
       await handlePageRequest(res, requestUrl, {
         auth,
+        mutationSync,
         pagesDir,
         projectVersion,
         runtimeParams,

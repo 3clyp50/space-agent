@@ -54,7 +54,7 @@ Runtime-state commands:
 
 The command tree prefers a small number of readable top-level commands with explicit subcommands instead of many tiny files.
 
-`node space version` and the `/enter` launcher version label share the resolver in `server/lib/utils/project_version.js`. Source checkouts use the latest Git tag plus commit count when needed, while package-only runtimes can fall back to the package version for display.
+`node space version`, the `node space serve` startup banner, and the `/enter` launcher version label share the resolver in `server/lib/utils/project_version.js`. Source checkouts use the latest Git tag plus commit count when needed, while package-only runtimes can fall back to the package version for display.
 
 ## `update`
 
@@ -121,6 +121,11 @@ The supervisor intentionally avoids changing `server/` lifecycle code. Its only 
 
 `node space serve` starts the local runtime.
 
+Current startup output:
+
+- prints `space server version <resolved version>` before the listening banner
+- preserves the separate `space server listening at <url>` line so supervisor readiness parsing stays stable
+
 Current override forms:
 
 - `PARAM=VALUE`
@@ -142,6 +147,7 @@ Current params:
 
 - `HOST`
 - `PORT`
+- `WORKERS`
 - `CUSTOMWARE_PATH`
 - `SINGLE_USER_APP`
 - `ALLOW_GUEST_USERS`
@@ -162,9 +168,10 @@ Only params with `frontend_exposed: true` are injected into page-shell meta tags
 
 - `CUSTOMWARE_PATH`: parent directory that owns writable `L1/` and `L2/` roots
 - `PORT`: accepts `0` when a caller wants the OS to assign a free local port at startup
+- `WORKERS`: number of parallel HTTP worker processes for `serve` and `supervise`; `1` keeps the single-process runtime, and larger values start a clustered primary plus worker model with one authoritative replicated state host
 - `SINGLE_USER_APP`: implicit always-authenticated `user` principal with virtual `_admin` access
 - `ALLOW_GUEST_USERS`: enables guest creation from the login screen when password login is enabled
-- `CUSTOMWARE_GIT_HISTORY`: enables optional debounced local Git history repositories for writable `L1/<group>/` and `L2/<user>/` roots; defaults to `false`; owner-root commits wait 10 seconds of quiet, then shorten to 5 seconds after 1 minute of pending writes, 1 second after 5 minutes, and immediate commit after 10 minutes
+- `CUSTOMWARE_GIT_HISTORY`: enables optional debounced local Git history repositories for writable `L1/<group>/` and `L2/<user>/` roots; defaults to `true`; owner-root commits wait 10 seconds of quiet, then shorten to 5 seconds after 1 minute of pending writes, 1 second after 5 minutes, and immediate commit after 10 minutes
 - `USER_FOLDER_SIZE_LIMIT_BYTES`: optional per-user `L2/<user>/` folder cap in bytes; `0` disables it, and positive values make app-file mutations reject projected growth over the cap while still allowing mutations that reduce an already-over-limit folder
 - `user` and `group` commands flush pending local-history commits before returning when `CUSTOMWARE_GIT_HISTORY` is enabled because those commands are short-lived processes
 - `node space set CUSTOMWARE_PATH <path>` should be run before creating users or groups when writable state should live outside the source checkout, because `user` and `group` commands resolve that stored parameter before deciding where `L1` and `L2` files belong

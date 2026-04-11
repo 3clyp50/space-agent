@@ -24,6 +24,7 @@ Important notes:
 - these are the only explicitly anonymous endpoint families today
 - password login flows through the shared auth challenge/proof service
 - `guest_create` creates a guest `L2` user only when runtime config allows guest accounts
+- in clustered runtime, login challenges are coordinated through the primary-only `login_challenge` area of the unified state system while workers still validate cookies and write `logins.json`
 
 ## Module Endpoints
 
@@ -39,10 +40,11 @@ These delegate to `server/lib/customware/module_manage.js`.
 Important behaviors:
 
 - module writes must reuse shared permission rules
-- module writes should refresh the watchdog afterward
+- module writes should publish changed logical paths through the shared mutation commit flow so every worker sees the new module state before the response finishes
 - when `USER_FOLDER_SIZE_LIMIT_BYTES` is positive, new L2 module installs are cloned into a system temp directory, measured, and quota-checked before they are moved into `L2/<user>/mod/...`
 - module list surfaces distinguish areas such as `l1`, `l2_self`, `l2_user`, and `l2_users`
 - cross-user or aggregated user-layer module listings are admin-only
+- follow-up requests that depend on the new module state rely on `Space-State-Version` fencing rather than a cluster-wide worker acknowledgement barrier
 
 ## Runtime And Identity Endpoints
 

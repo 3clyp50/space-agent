@@ -1,6 +1,7 @@
 import { createHttpError } from "../lib/customware/file_access.js";
 import { normalizeMaxLayer } from "../lib/customware/layer_limit.js";
 import { installModule, readModuleInfo } from "../lib/customware/module_manage.js";
+import { runTrackedMutation } from "../runtime/request_mutations.js";
 
 function readPayload(context) {
   return context.body && typeof context.body === "object" && !Buffer.isBuffer(context.body)
@@ -36,29 +37,23 @@ function readMaxLayer(context) {
   return normalizeMaxLayer(payload.maxLayer ?? context.params.maxLayer);
 }
 
-async function refreshWatchdog(context) {
-  if (context.watchdog && typeof context.watchdog.refresh === "function") {
-    await context.watchdog.refresh();
-  }
-}
-
 export async function post(context) {
   const payload = readPayload(context);
 
   try {
-    const result = await installModule({
-      commit: readRevision(payload.commit),
-      path: readTargetPath(context),
-      projectRoot: context.projectRoot,
-      repoUrl: readRepositoryUrl(context),
-      runtimeParams: context.runtimeParams,
-      tag: readRevision(payload.tag),
-      token: readRevision(payload.token),
-      username: context.user?.username,
-      watchdog: context.watchdog
-    });
-
-    await refreshWatchdog(context);
+    const result = await runTrackedMutation(context, async () =>
+      installModule({
+        commit: readRevision(payload.commit),
+        path: readTargetPath(context),
+        projectRoot: context.projectRoot,
+        repoUrl: readRepositoryUrl(context),
+        runtimeParams: context.runtimeParams,
+        tag: readRevision(payload.tag),
+        token: readRevision(payload.token),
+        username: context.user?.username,
+        watchdog: context.watchdog
+      })
+    );
 
     return {
       ...result,

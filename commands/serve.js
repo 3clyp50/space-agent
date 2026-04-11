@@ -1,4 +1,4 @@
-import { startServer } from "../server/server.js";
+import { logServerStartup, startServer } from "../server/server.js";
 import {
   findParamSpec,
   validateConfigValue
@@ -63,10 +63,10 @@ export const help = {
     "node space serve",
     "node space serve --host 0.0.0.0 --port 3000",
     "node space serve PORT=0",
-    "node space serve PORT=3100 ALLOW_GUEST_USERS=false"
+    "node space serve PORT=3100 WORKERS=8 ALLOW_GUEST_USERS=false"
   ],
   description:
-    "Starts the local Node server that serves the browser app and proxies fetch requests. Runtime parameters may be overridden at launch with PARAM=VALUE arguments; launch arguments win over stored .env parameters, which win over process environment variables. Use node space set CUSTOMWARE_PATH <path> before creating users or groups when writable state should live outside the source checkout.",
+    "Starts the local Node server that serves the browser app and proxies fetch requests. Runtime parameters may be overridden at launch with PARAM=VALUE arguments; launch arguments win over stored .env parameters, which win over process environment variables. Use node space set CUSTOMWARE_PATH <path> before creating users or groups when writable state should live outside the source checkout. Set WORKERS>1 to start a clustered HTTP worker pool with one authoritative primary process for shared filesystem and auth state.",
   options: [
     {
       flag: "--host <host>",
@@ -80,6 +80,7 @@ export const help = {
   examples: [
     "node space serve",
     "node space serve SINGLE_USER_APP=true",
+    "node space serve WORKERS=8",
     "node space set CUSTOMWARE_PATH /srv/space/customware",
     "node space serve"
   ]
@@ -88,10 +89,11 @@ export const help = {
 export async function execute(context) {
   const runtimeParamOverrides = await parseServeArgs(context.args, context.projectRoot);
   const server = await startServer({
+    projectRoot: context.projectRoot,
     runtimeParamEnv: context.originalEnv,
     runtimeParamOverrides
   });
 
-  console.log(`space server listening at ${server.browserUrl}`);
+  logServerStartup(server, context.projectRoot);
   return 0;
 }

@@ -1,4 +1,8 @@
-import { buildGroupIndexSnapshot } from "../../customware/group_index.js";
+import {
+  buildGroupIndexSnapshot,
+  hydrateGroupIndexSnapshot,
+  serializeGroupIndexSnapshot
+} from "../../customware/group_index.js";
 import { WatchdogHandler } from "../watchdog.js";
 
 export default class GroupIndexHandler extends WatchdogHandler {
@@ -26,5 +30,13 @@ export default class GroupIndexHandler extends WatchdogHandler {
 
   async onChanges(context) {
     this.rebuild(context);
+  }
+
+  restoreState(state) {
+    this.state = hydrateGroupIndexSnapshot(state);
+  }
+
+  serializeState(state) {
+    return serializeGroupIndexSnapshot(state);
   }
 }

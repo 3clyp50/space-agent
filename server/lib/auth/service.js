@@ -22,6 +22,7 @@ import {
   writeUserLogins,
   writeUserPasswordVerifier
 } from "./user_files.js";
+import { LOGIN_CHALLENGE_AREA } from "../../runtime/state_areas.js";
 
 const SESSION_COOKIE_NAME = "space_session";
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
@@ -112,14 +113,44 @@ function createSessionToken() {
   return randomBytes(32).toString("base64url");
 }
 
-function cleanupExpiredChallenges(challenges) {
-  const now = Date.now();
+function createStateBackedLoginChallengeStore(stateSystem) {
+  return {
+    async consumeLoginChallenge(challengeToken) {
+      const normalizedChallengeToken = String(challengeToken || "").trim();
 
-  for (const [challengeToken, challenge] of challenges.entries()) {
-    if (now - Number(challenge.createdAtMs || 0) > CHALLENGE_TTL_MS) {
-      challenges.delete(challengeToken);
+      if (!normalizedChallengeToken) {
+        return null;
+      }
+
+      const entry = await stateSystem.takeEntry(LOGIN_CHALLENGE_AREA, normalizedChallengeToken);
+      const challenge =
+        entry?.value && typeof entry.value === "object" && !Array.isArray(entry.value)
+          ? entry.value
+          : null;
+
+      return challenge ? { ...challenge } : null;
+    },
+    async storeLoginChallenge(challenge) {
+      const normalizedChallengeToken = String(challenge?.challengeToken || "").trim();
+
+      if (!normalizedChallengeToken) {
+        throw new Error("Challenge token is required.");
+      }
+
+      await stateSystem.setEntry(
+        LOGIN_CHALLENGE_AREA,
+        normalizedChallengeToken,
+        {
+          ...challenge,
+          challengeToken: normalizedChallengeToken
+        },
+        {
+          expiresInMs: CHALLENGE_TTL_MS,
+          replicate: false
+        }
+      );
     }
-  }
+  };
 }
 
 function normalizeHeaderValue(value, maxLength) {
@@ -134,6 +165,25 @@ function getRemoteAddress(req) {
 
 function getUserAgentFromHeaders(headers) {
   return normalizeHeaderValue(headers?.["user-agent"], USER_AGENT_MAX_LENGTH);
+}
+
+function resolveRequestInfo(options = {}) {
+  const requestInfo =
+    options.requestInfo && typeof options.requestInfo === "object" && !Array.isArray(options.requestInfo)
+      ? options.requestInfo
+      : null;
+
+  if (requestInfo) {
+    return {
+      remoteAddress: normalizeHeaderValue(requestInfo.remoteAddress, REMOTE_ADDRESS_MAX_LENGTH),
+      userAgent: normalizeHeaderValue(requestInfo.userAgent, USER_AGENT_MAX_LENGTH)
+    };
+  }
+
+  return {
+    remoteAddress: getRemoteAddress(options.req),
+    userAgent: getUserAgentFromHeaders(options.req?.headers)
+  };
 }
 
 function getSessionHmacKey(authKeys) {
@@ -248,11 +298,15 @@ function normalizeStoredSessionRecord(options = {}) {
   };
 }
 
-function createPersistedSessionRecord({ req, sessionVerifier, username }, authKeys) {
+function createPersistedSessionRecord({ req, requestInfo, sessionVerifier, username }, authKeys) {
+  const resolvedRequestInfo = resolveRequestInfo({
+    req,
+    requestInfo
+  });
   const createdAt = new Date().toISOString();
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
-  const remoteAddress = getRemoteAddress(req);
-  const userAgent = getUserAgentFromHeaders(req?.headers);
+  const remoteAddress = resolvedRequestInfo.remoteAddress;
+  const userAgent = resolvedRequestInfo.userAgent;
 
   return {
     createdAt,
@@ -309,10 +363,24 @@ function sanitizeStoredLogins(logins, username, authKeys) {
 
 export function createAuthService(options = {}) {
   const authKeys = loadAuthKeys(options.projectRoot);
+  const stateSystem =
+    options.stateSystem &&
+    typeof options.stateSystem === "object" &&
+    !Array.isArray(options.stateSystem) &&
+    typeof options.stateSystem.setEntry === "function" &&
+    typeof options.stateSystem.takeEntry === "function"
+      ? options.stateSystem
+      : null;
+
+  if (!stateSystem) {
+    throw new Error("createAuthService() requires a shared state system.");
+  }
+
+  const challengeStore = createStateBackedLoginChallengeStore(stateSystem);
+  const enableInitialization = options.enableInitialization !== false;
   const projectRoot = String(options.projectRoot || "");
   const runtimeParams = options.runtimeParams || null;
   const watchdog = options.watchdog || null;
-  const challenges = new Map();
   let initialized = false;
 
   function getUserIndex() {
@@ -399,12 +467,15 @@ export function createAuthService(options = {}) {
     };
   }
 
-  function createLoginChallenge({ req, username, clientNonce }) {
+  async function createLoginChallenge({ req, requestInfo, username, clientNonce }) {
     if (isSingleUserApp(runtimeParams)) {
       throw new Error("Password login is disabled in single-user mode.");
     }
 
-    cleanupExpiredChallenges(challenges);
+    const resolvedRequestInfo = resolveRequestInfo({
+      req,
+      requestInfo
+    });
 
     const normalizedUsername = normalizeEntityId(username);
     const normalizedClientNonce = normalizeNonce(clientNonce);
@@ -419,16 +490,16 @@ export function createAuthService(options = {}) {
       throw new Error("Invalid username or password.");
     }
 
-    const challengeToken = createChallengeToken();
     const serverNonce = createChallengeToken();
     const createdAtMs = Date.now();
+    const challengeToken = createChallengeToken();
 
-    challenges.set(challengeToken, {
+    await challengeStore.storeLoginChallenge({
+      challengeToken,
       clientNonce: normalizedClientNonce,
       createdAtMs,
-      remoteAddress: getRemoteAddress(req),
       serverNonce,
-      userAgent: getUserAgentFromHeaders(req?.headers),
+      userAgent: resolvedRequestInfo.userAgent,
       username: normalizedUsername
     });
 
@@ -441,21 +512,22 @@ export function createAuthService(options = {}) {
     };
   }
 
-  async function completeLogin({ challengeToken, clientProof, req }) {
+  async function completeLogin({ challengeToken, clientProof, req, requestInfo }) {
     if (isSingleUserApp(runtimeParams)) {
       throw new Error("Password login is disabled in single-user mode.");
     }
 
-    cleanupExpiredChallenges(challenges);
+    const resolvedRequestInfo = resolveRequestInfo({
+      req,
+      requestInfo
+    });
 
     const normalizedChallengeToken = String(challengeToken || "").trim();
-    const challenge = challenges.get(normalizedChallengeToken);
+    const challenge = await challengeStore.consumeLoginChallenge(normalizedChallengeToken);
 
     if (!challenge) {
       throw new Error("Login challenge expired. Try again.");
     }
-
-    challenges.delete(normalizedChallengeToken);
 
     const verifier = getUserIndex().getUser(challenge.username)?.hasPassword
       ? readCurrentPasswordVerifier(challenge.username)
@@ -465,7 +537,7 @@ export function createAuthService(options = {}) {
       throw new Error("Invalid username or password.");
     }
 
-    if (challenge.userAgent !== getUserAgentFromHeaders(req?.headers)) {
+    if (challenge.userAgent !== resolvedRequestInfo.userAgent) {
       throw new Error("Login challenge no longer matches this browser.");
     }
 
@@ -492,7 +564,7 @@ export function createAuthService(options = {}) {
 
     logins[sessionVerifier] = createPersistedSessionRecord(
       {
-        req,
+        requestInfo: resolvedRequestInfo,
         sessionVerifier,
         username: challenge.username
       },
@@ -507,10 +579,6 @@ export function createAuthService(options = {}) {
       },
       [`/app/L2/${challenge.username}/meta/logins.json`]
     );
-
-    if (watchdog && typeof watchdog.refresh === "function") {
-      await watchdog.refresh();
-    }
 
     return {
       serverSignature: loginResult.serverSignature,
@@ -552,10 +620,6 @@ export function createAuthService(options = {}) {
       [`/app/L2/${normalizedUsername}/meta/logins.json`]
     );
 
-    if (watchdog && typeof watchdog.refresh === "function") {
-      await watchdog.refresh();
-    }
-
     return true;
   }
 
@@ -570,9 +634,14 @@ export function createAuthService(options = {}) {
 
     initialized = true;
 
+    if (!enableInitialization) {
+      return;
+    }
+
     const userIndex = getUserIndex();
     const usernames = Object.keys(userIndex.users || {});
     let changed = false;
+    const changedProjectPaths = new Set();
 
     usernames.forEach((username) => {
       const normalizedUsername = normalizeEntityId(username);
@@ -602,6 +671,7 @@ export function createAuthService(options = {}) {
           },
           [`/app/L2/${normalizedUsername}/meta/password.json`]
         );
+        changedProjectPaths.add(`/app/L2/${normalizedUsername}/meta/password.json`);
         changed = true;
       }
 
@@ -616,12 +686,18 @@ export function createAuthService(options = {}) {
           },
           [`/app/L2/${normalizedUsername}/meta/logins.json`]
         );
+        changedProjectPaths.add(`/app/L2/${normalizedUsername}/meta/logins.json`);
         changed = true;
       }
     });
 
-    if (changed && watchdog && typeof watchdog.refresh === "function") {
-      await watchdog.refresh();
+    if (
+      changed &&
+      watchdog &&
+      typeof watchdog.applyProjectPathChanges === "function" &&
+      changedProjectPaths.size > 0
+    ) {
+      await watchdog.applyProjectPathChanges([...changedProjectPaths]);
     }
   }
 

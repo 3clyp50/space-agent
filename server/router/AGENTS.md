@@ -39,6 +39,19 @@ Rules:
 - do not hide route precedence in scattered conditionals across unrelated files
 - all non-public API, module, and app-fetch routes require an authenticated request context before dispatch
 
+## State Version Contract
+
+`router.js` owns the request-level replicated-state fence.
+
+Current behavior:
+
+- every response advertises the worker's current replicated version through `Space-State-Version`
+- every response also advertises the handling worker number through `Space-Worker`
+- requests may send `Space-State-Version` as the minimum version they require before handling continues
+- when a worker is behind that requested version, the router waits briefly for local catch-up before dispatch
+- if the worker still cannot satisfy the requested version within the bounded wait, the router returns a retryable `503`
+- the frontend fetch wrapper is expected to carry the highest seen version on follow-up same-origin requests
+
 ## Request Context Contract
 
 `request_context.js` owns request-scoped auth state.
@@ -88,4 +101,4 @@ Responses:
 - keep page and module serving thin and delegate policy decisions to shared helpers
 - do not bypass `request_context.js` for auth state
 - if routing order, page gating, launcher behavior, or direct app-fetch semantics change, also update the matching docs under `app/L0/_all/mod/_core/documentation/docs/server/`
-- if routing order, auth flow, page handling, or response contracts change, update this file and `/server/AGENTS.md`
+- if routing order, auth flow, page handling, response contracts, or state-version fencing change, update this file and `/server/AGENTS.md`

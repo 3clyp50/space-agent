@@ -1,4 +1,5 @@
 import { createHttpError, writeAppFile, writeAppFiles } from "../lib/customware/file_access.js";
+import { runTrackedMutation } from "../runtime/request_mutations.js";
 
 function readPayload(context) {
   return context.body && typeof context.body === "object" && !Buffer.isBuffer(context.body)
@@ -14,27 +15,24 @@ export async function post(context) {
   const payload = readPayload(context);
 
   try {
-    const options = {
-      content: payload.content,
-      encoding: String(payload.encoding || "utf8"),
-      path: String(payload.path || context.params.path || ""),
-      projectRoot: context.projectRoot,
-      runtimeParams: context.runtimeParams,
-      username: context.user?.username,
-      watchdog: context.watchdog
-    };
-    const result = hasBatchWrite(payload)
-      ? writeAppFiles({
-          ...options,
-          files: payload.files
-        })
-      : writeAppFile(options);
+    return await runTrackedMutation(context, async () => {
+      const options = {
+        content: payload.content,
+        encoding: String(payload.encoding || "utf8"),
+        path: String(payload.path || context.params.path || ""),
+        projectRoot: context.projectRoot,
+        runtimeParams: context.runtimeParams,
+        username: context.user?.username,
+        watchdog: context.watchdog
+      };
 
-    if (context.watchdog && typeof context.watchdog.refresh === "function") {
-      await context.watchdog.refresh();
-    }
-
-    return result;
+      return hasBatchWrite(payload)
+        ? writeAppFiles({
+            ...options,
+            files: payload.files
+          })
+        : writeAppFile(options);
+    });
   } catch (error) {
     throw createHttpError(error.message || "File write failed.", Number(error.statusCode) || 500);
   }

@@ -81,6 +81,89 @@ function sortStrings(values) {
   return [...values].sort((left, right) => left.localeCompare(right));
 }
 
+function hydrateGroupIndexSnapshot(snapshot = {}) {
+  const groups =
+    snapshot.groups && typeof snapshot.groups === "object" && !Array.isArray(snapshot.groups)
+      ? {
+          ...snapshot.groups
+        }
+      : Object.create(null);
+  const users =
+    snapshot.users && typeof snapshot.users === "object" && !Array.isArray(snapshot.users)
+      ? {
+          ...snapshot.users
+        }
+      : Object.create(null);
+  const errors = Array.isArray(snapshot.errors) ? [...snapshot.errors] : [];
+  const inclusionCycles = Array.isArray(snapshot.inclusionCycles) ? [...snapshot.inclusionCycles] : [];
+
+  function isUserInGroup(username, groupId) {
+    const normalizedUsername = normalizeEntityId(username);
+    const normalizedGroupId = normalizeEntityId(groupId);
+
+    if (!normalizedGroupId) {
+      return false;
+    }
+
+    if (normalizedGroupId === "_all") {
+      return true;
+    }
+
+    const groupRecord = groups[normalizedGroupId];
+
+    if (!groupRecord) {
+      return false;
+    }
+
+    if (groupRecord.includesAllUsers) {
+      return true;
+    }
+
+    if (!normalizedUsername) {
+      return false;
+    }
+
+    return Array.isArray(groupRecord.memberUsers) && groupRecord.memberUsers.includes(normalizedUsername);
+  }
+
+  function getOrderedGroupsForUser(username) {
+    const normalizedUsername = normalizeEntityId(username);
+    const userRecord = normalizedUsername ? users[normalizedUsername] || null : null;
+    return userRecord && Array.isArray(userRecord.groups) ? [...userRecord.groups] : [];
+  }
+
+  function getManagedGroupsForUser(username) {
+    const normalizedUsername = normalizeEntityId(username);
+    const userRecord = normalizedUsername ? users[normalizedUsername] || null : null;
+    return userRecord && Array.isArray(userRecord.managedGroups) ? [...userRecord.managedGroups] : [];
+  }
+
+  return {
+    errors,
+    getManagedGroupsForUser,
+    getOrderedGroupsForUser,
+    groups,
+    inclusionCycles,
+    isUserInGroup,
+    users
+  };
+}
+
+function serializeGroupIndexSnapshot(snapshot = {}) {
+  const hydratedSnapshot = hydrateGroupIndexSnapshot(snapshot);
+
+  return {
+    errors: [...hydratedSnapshot.errors],
+    groups: {
+      ...hydratedSnapshot.groups
+    },
+    inclusionCycles: [...hydratedSnapshot.inclusionCycles],
+    users: {
+      ...hydratedSnapshot.users
+    }
+  };
+}
+
 function buildGroupIndexSnapshot(context) {
   const groupRecords = new Map();
   const userRecords = new Map();
@@ -421,15 +504,16 @@ function buildGroupIndexSnapshot(context) {
     };
   }
 
-  return {
+  return hydrateGroupIndexSnapshot({
     errors,
-    getManagedGroupsForUser,
-    getOrderedGroupsForUser,
     groups,
     inclusionCycles,
-    isUserInGroup,
     users
-  };
+  });
 }
 
-export { buildGroupIndexSnapshot };
+export {
+  buildGroupIndexSnapshot,
+  hydrateGroupIndexSnapshot,
+  serializeGroupIndexSnapshot
+};

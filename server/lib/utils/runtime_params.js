@@ -262,6 +262,24 @@ function normalizeRuntimeParamSources(options = {}) {
   };
 }
 
+function normalizeRuntimeParamEntrySnapshot(entry = {}) {
+  const name = normalizeParamName(entry.name);
+
+  if (!name) {
+    return null;
+  }
+
+  return {
+    allowed: Array.isArray(entry.allowed) ? entry.allowed.map((value) => String(value)) : [],
+    description: String(entry.description || ""),
+    frontendExposed: Boolean(entry.frontendExposed),
+    name,
+    source: String(entry.source || "snapshot"),
+    type: String(entry.type || "text"),
+    value: entry.value
+  };
+}
+
 function resolveRuntimeParamEntry(spec, sources = {}) {
   const overrides = sources.overrides || {};
   const storedValues = sources.storedValues || {};
@@ -331,6 +349,52 @@ async function createRuntimeParams(projectRoot, options = {}) {
   };
 }
 
+function hydrateRuntimeParams(entries = []) {
+  const normalizedEntries = Array.isArray(entries)
+    ? entries.map((entry) => normalizeRuntimeParamEntrySnapshot(entry)).filter(Boolean)
+    : [];
+  const entryMap = new Map(normalizedEntries.map((entry) => [entry.name, entry]));
+
+  return {
+    get(rawParamName, fallback = undefined) {
+      const paramName = normalizeParamName(rawParamName);
+      const entry = paramName ? entryMap.get(paramName) : null;
+      return entry && entry.value !== undefined ? entry.value : fallback;
+    },
+    getEntry(rawParamName) {
+      const paramName = normalizeParamName(rawParamName);
+      const entry = paramName ? entryMap.get(paramName) || null : null;
+      return entry ? { ...entry } : null;
+    },
+    has(rawParamName) {
+      const paramName = normalizeParamName(rawParamName);
+      const entry = paramName ? entryMap.get(paramName) : null;
+      return Boolean(entry && entry.value !== undefined);
+    },
+    list() {
+      return normalizedEntries.map((entry) => ({ ...entry }));
+    },
+    listFrontendExposed() {
+      return normalizedEntries
+        .filter((entry) => entry.frontendExposed && entry.value !== undefined)
+        .map((entry) => ({
+          ...entry,
+          content: serializeRuntimeValue(entry, entry.value)
+        }));
+    }
+  };
+}
+
+function serializeRuntimeParams(runtimeParams) {
+  if (!runtimeParams || typeof runtimeParams.list !== "function") {
+    return [];
+  }
+
+  return runtimeParams.list().map((entry) => ({
+    ...entry
+  }));
+}
+
 function isSingleUserApp(runtimeParams) {
   return Boolean(runtimeParams && typeof runtimeParams.get === "function" && runtimeParams.get("SINGLE_USER_APP"));
 }
@@ -354,9 +418,11 @@ export {
   findParamSpec,
   formatAllowedValues,
   getStoredParamValue,
+  hydrateRuntimeParams,
   isSingleUserApp,
   loadParamSpecs,
   normalizeParamName,
+  serializeRuntimeParams,
   serializeRuntimeValue,
   validateConfigValue
 };

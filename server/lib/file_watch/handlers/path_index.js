@@ -1,29 +1,33 @@
 import { WatchdogHandler } from "../watchdog.js";
 
-function buildPathIndex(paths) {
-  const index = Object.create(null);
-
-  for (const projectPath of paths) {
-    index[projectPath] = true;
-  }
-
-  return index;
-}
-
 export default class PathIndexHandler extends WatchdogHandler {
   createInitialState() {
     return Object.create(null);
   }
 
-  rebuild(context) {
-    this.state = buildPathIndex(context.getCurrentPaths());
-  }
-
   async onStart(context) {
-    this.rebuild(context);
+    this.state = context.getCurrentPathIndex();
   }
 
   async onChanges(context) {
-    this.rebuild(context);
+    this.state = context.getCurrentPathIndex();
+  }
+
+  restoreState(state) {
+    this.state =
+      state && typeof state === "object" && !Array.isArray(state)
+        ? Object.fromEntries(
+            Object.entries(state).map(([projectPath, metadata]) => [projectPath, { ...metadata }])
+          )
+        : Object.create(null);
+  }
+
+  serializeState(state) {
+    return Object.fromEntries(
+      Object.entries(state || Object.create(null)).map(([projectPath, metadata]) => [
+        projectPath,
+        { ...metadata }
+      ])
+    );
   }
 }

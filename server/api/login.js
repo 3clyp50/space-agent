@@ -1,4 +1,5 @@
 import { isSingleUserApp } from "../lib/utils/runtime_params.js";
+import { runTrackedMutation } from "../runtime/request_mutations.js";
 
 export const allowAnonymous = true;
 
@@ -37,11 +38,13 @@ export async function post(context) {
   let response;
 
   try {
-    const loginResult = await context.auth.completeLogin({
-      challengeToken: payload.challengeToken,
-      clientProof: payload.clientProof,
-      req: context.req
-    });
+    const loginResult = await runTrackedMutation(context, async () =>
+      context.auth.completeLogin({
+        challengeToken: payload.challengeToken,
+        clientProof: payload.clientProof,
+        req: context.req
+      })
+    );
 
     response = {
       status: 200,

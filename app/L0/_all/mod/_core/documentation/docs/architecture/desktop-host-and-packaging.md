@@ -26,6 +26,7 @@ Current startup contract:
 
 - the desktop host binds the backend to `127.0.0.1`
 - it passes `PORT=0`, so the OS assigns a free local port for that launch
+- packaged apps also force `WORKERS=1`, so the standalone desktop host stays on the single-process server runtime
 - packaged apps also set `CUSTOMWARE_PATH` to `<userData>/customware`, so writable `L1/` and `L2/` content stays in the native OS user-data location instead of inside the installed app bundle
 - after `listen()`, the server runtime updates its public `port` and `browserUrl` fields to the resolved bound port
 - the host loads `${browserUrl}${launchPath}` instead of reconstructing a fixed URL from config
@@ -35,6 +36,7 @@ Current startup contract:
 Current Electron behavior differs only where the native-host contract requires it:
 
 - packaged apps force `SINGLE_USER_APP=true`
+- packaged apps force `WORKERS=1`
 - packaged apps persist writable customware under the native user-data root through `CUSTOMWARE_PATH`
 - packaged apps open `/enter` as the recovery-safe launcher shell
 - source-checkout desktop dev runs keep the normal runtime auth flow
@@ -51,6 +53,7 @@ Desktop packaging is owned by `packaging/scripts/desktop-builder.js` plus thin p
 Current build behavior:
 
 - reads the root `package.json` `build` config
+- keeps the root `package.json` version aligned with the current Git-derived release version, because npm script banners and some packaging fallback paths read that metadata directly
 - keeps desktop-host runtime modules such as `electron-updater` in the root `dependencies` block so they are copied into the packaged app, while `packaging/package.json` stays limited to build-tool dependencies
 - normalizes tag-like versions such as `v0.22` to a semver build version through `packaging/scripts/release-version.js`, so CI and local packaging can stamp the desktop app version consistently; the resolver checks explicit `--app-version`, release env vars, an exact checked-out Git tag, and finally the root package version
 - keeps `directories.app` pinned to the repo root because the Electron host entry lives outside `app/`

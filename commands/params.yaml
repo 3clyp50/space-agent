@@ -12,6 +12,12 @@ PORT:
   allowed: [0..65535]
   default: 3000
   frontend_exposed: false
+WORKERS:
+  description: Number of HTTP worker processes to run for node space serve and node space supervise. Set to 1 for single-process mode.
+  type: number
+  allowed: [1..256]
+  default: 1
+  frontend_exposed: false
 CUSTOMWARE_PATH:
   description: Optional absolute or project-relative directory that owns writable L1/ and L2/ roots as CUSTOMWARE_PATH/L1 and CUSTOMWARE_PATH/L2.
   type: text

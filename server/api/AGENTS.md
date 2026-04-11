@@ -36,7 +36,8 @@ Current rules:
 - these are the only explicit anonymous endpoints today
 - login uses the shared auth service challenge and proof flow unless runtime config disables password login
 - successful login sets the `space_session` cookie through the auth service, while the durable session verifier stays in `L2/<username>/meta/logins.json`
-- `guest_create` creates an `L2` guest user and refreshes the watchdog only when runtime config allows guest accounts
+- `guest_create` creates an `L2` guest user only when runtime config allows guest accounts and must publish the concrete new auth files through the shared mutation path so `user_index` sees the account immediately
+- in clustered runtime, login challenges are stored in the primary-only `login_challenge` state area while workers still validate cookies from replicated auth index shards
 
 App-file endpoints:
 
@@ -70,9 +71,11 @@ Current rules:
 - `git_history_list` returns paginated local-history commit metadata for a readable or writable `L1/<group>/` or `L2/<user>/` owner root when `CUSTOMWARE_GIT_HISTORY` is enabled; it accepts `limit`, `offset`, and `fileFilter`, returns full per-commit file action metadata for listed commits, and does not return patch bodies
 - `git_history_diff` returns the patch body for one file in one commit after read permission is verified
 - `git_history_preview` returns affected-file metadata for a travel or revert operation after write permission is verified, and returns an operation-specific patch when `filePath` is provided
-- `git_history_rollback` hard-resets a writable owner-root history repository to a requested commit, preserves ignored L2 auth files, preserves the previous head for forward travel when possible, and refreshes the watchdog after the reset
-- `git_history_revert` creates a new commit that undoes a selected commit, preserves ignored L2 auth files, and refreshes the watchdog after the revert
+- `git_history_rollback` hard-resets a writable owner-root history repository to a requested commit, preserves ignored L2 auth files, preserves the previous head for forward travel when possible, and publishes the changed owner root through the shared mutation path after the reset
+- `git_history_revert` creates a new commit that undoes a selected commit, preserves ignored L2 auth files, and publishes the changed owner root through the shared mutation path after the revert
 - history endpoints delegate path normalization, permission checks, commit listing, diff reads, rollback, revert, and commit-loop suppression to `server/lib/customware/git_history.js`
+- mutating endpoints should go through `server/runtime/request_mutations.js` so clustered workers perform the local write first, then commit changed logical paths back to the primary once before the response finishes
+- cross-worker follow-up freshness comes from `Space-State-Version` request or response fencing, not from waiting for every worker to acknowledge each write
 
 Module endpoints:
 

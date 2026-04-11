@@ -39,23 +39,25 @@ Current session rules:
 - the session cookie name is `space_session`
 - the cookie is `HttpOnly`, `SameSite=Strict`, scoped to `/`, and carries a 30-day max age
 - login uses the shared challenge and proof flow from `service.js`
-- successful login writes a backend-keyed session verifier plus signed metadata into `meta/logins.json` and refreshes the watchdog
+- successful login writes a backend-keyed session verifier plus signed metadata into `meta/logins.json` and publishes the changed logical auth paths through the shared mutation-commit flow
 - when `CUSTOMWARE_GIT_HISTORY` is enabled, login, logout, verifier migration, user creation, and password reset writes may schedule the affected user's debounced local-history check, but `meta/password.json` and `meta/logins.json` are ignored by the L2 history repo and preserved during rollback
 - session records include signed metadata and an absolute expiry timestamp
-- session revocation deletes the stored session entry and refreshes the watchdog
+- session revocation deletes the stored session entry and publishes the changed logical auth path through the shared mutation-commit flow
 - unsigned or expired session records are rejected even if they exist on disk
 - when `SINGLE_USER_APP` is enabled, request auth resolves every request to the implicit `user` principal and bypasses cookie-backed login entirely
+- in clustered runtime, cookie validation still runs on workers from replicated `user_index` and `session_index` shards, while one-time login challenges live in the primary-only `login_challenge/<token>` area of the unified state system
 
 Current password rules:
 
 - `meta/password.json` stores a server-sealed SCRAM verifier envelope, not plaintext `stored_key` and `server_key` fields
 - only backend helpers that hold the auth seal key may generate accepted password records
-- the auth service rewrites legacy plaintext verifier files into sealed records during startup before the server begins handling requests
+- the auth service rewrites legacy plaintext verifier files into sealed records during startup before the server begins handling requests; in clustered runtime this initialization stays on the primary so workers do not all rescan `L2`
+- `createAuthService(...)` requires the shared state system; the auth runtime should not invent a second in-memory challenge path
 
 Current user-index rules:
 
 - `user_index.js` derives user records, sealed-password presence, and stored session graphs from `user.yaml`, `password.json`, and `logins.json`
-- request auth state should flow from that derived index, while `service.js` remains the owner of password-record opening and session-signature validation
+- request auth state should flow from the replicated derived index shards, while `service.js` remains the owner of password-record opening and session-signature validation
 
 ## User-Management Contract
 
@@ -68,6 +70,7 @@ Current user-index rules:
 Rules:
 
 - user creation initializes the user directory, `meta/`, and `mod/`
+- user creation must publish the concrete auth files it creates, not only the user directory root, so incremental user-index rebuilds see new accounts immediately
 - CLI-owned group assignment for `node space user create --groups ...` belongs in `commands/user.js` and `server/lib/customware/group_files.js`, not in `user_manage.js`; `user_manage.js` should stay focused on user storage and auth files
 - password resets rewrite the sealed verifier and clear active sessions
 - guest users are created under randomized `guest_` usernames

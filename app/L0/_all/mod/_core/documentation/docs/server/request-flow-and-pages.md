@@ -42,6 +42,8 @@ Public:
 
 Request identity comes from `request_context.js`, which resolves the `space_session` cookie or the single-user runtime override.
 
+When `WORKERS>1`, the HTTP layer runs in multiple worker processes, but request routing order stays the same. The primary process owns the authoritative watchdog and unified replicated state system, while workers handle normal requests with replica indexes.
+
 ## Page Shells
 
 Server-owned shells live in `server/pages/`.
@@ -84,3 +86,16 @@ The router supports direct authenticated fetches for app files:
 - `/L0/...`, `/L1/...`, `/L2/...` -> logical layer paths
 
 These paths stay logical even when writable storage is relocated through `CUSTOMWARE_PATH`.
+
+## Cross-Worker Visibility
+
+Clustered writes are ordered through the primary watchdog owner and the shared state version.
+
+Current rules:
+
+- after a worker finishes a mutating request, it commits the changed logical app paths to the primary once
+- the primary updates the authoritative replicated state and broadcasts deltas or snapshots asynchronously; writes do not wait for every worker to acknowledge
+- responses advertise the worker's current replicated version through `Space-State-Version`
+- responses also advertise the handling worker number through `Space-Worker`
+- the frontend fetch wrapper carries the highest seen `Space-State-Version` on follow-up same-origin requests
+- if a request lands on a worker that is behind the requested version, the router waits briefly for catch-up before handling the request or returns a retryable `503`

@@ -78,6 +78,8 @@ Important shared rules:
 - batch operations validate all targets before mutation begins
 - single-path operations must keep working even when batch-only request fields are omitted
 - permission, overlap, path-normalization, and duplication logic belong in `file_access.js`, not endpoint-local code
+- clustered workers perform the filesystem mutation locally, then commit changed logical paths back to the primary once before the response finishes
+- cross-worker follow-up freshness comes from `Space-State-Version` request or response fencing, not from waiting for every worker to acknowledge the write
 
 ## User Folder Quotas
 
@@ -131,7 +133,7 @@ instead of manually fetching the blob into browser memory.
 
 Behavior summary:
 
-- the flag defaults to `false`
+- the flag defaults to `true`
 - each `L1/<group>/` and `L2/<user>/` owner root is committed as its own local repository when mutations are quiet for 10 seconds
 - long write bursts shorten the pending debounce to 5 seconds after 1 minute, 1 second after 5 minutes, and immediate commit after 10 minutes
 - app-file writes, deletes, copies, moves, group/user/auth writes, and module installs schedule history for the affected owner root

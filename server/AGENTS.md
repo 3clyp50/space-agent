@@ -26,6 +26,7 @@ Current subsystem-local docs in the server tree:
 - `server/api/AGENTS.md`
 - `server/router/AGENTS.md`
 - `server/pages/AGENTS.md`
+- `server/runtime/AGENTS.md`
 - `server/lib/customware/AGENTS.md`
 - `server/lib/auth/AGENTS.md`
 - `server/lib/file_watch/AGENTS.md`
@@ -85,6 +86,7 @@ Parent and child split rules:
 - keep the backend-only auth secret outside the logical app tree, using shared environment injection via `SPACE_AUTH_PASSWORD_SEAL_KEY` and `SPACE_AUTH_SESSION_HMAC_KEY` for multi-instance deployments or local fallback storage under `server/data/`
 - manage `server/tmp/` as janitor-backed transient storage for low-RAM server-side artifacts such as folder-download archives
 - resolve runtime parameters from launch overrides, stored `.env` values, process environment variables, and schema defaults, including backend storage parameters such as `CUSTOMWARE_PATH`
+- when `WORKERS>1`, run a clustered primary-plus-worker runtime where the primary owns authoritative shared state and the live watchdog while workers serve HTTP in parallel
 - expose `frontend_exposed` runtime parameters to page shells as injected meta tags
 - expose the resolved project version string to page shells that declare the `SPACE_PROJECT_VERSION` placeholder, using `server/lib/utils/project_version.js` as the shared resolver
 - support local development and source-checkout update flows without turning the server into business-logic orchestration
@@ -93,8 +95,9 @@ Parent and child split rules:
 
 Current server layout:
 
-- `server/app.js`: server factory and subsystem bootstrap
+- `server/app.js`: server factory and subsystem bootstrap; it normalizes the handling worker number before request routing so `Space-Worker` stays present in both single-process and clustered runtime
 - `server/server.js`: startup entry used by the CLI and thin host flows
+- `server/runtime/`: clustered worker runtime, unified state replication, request-mutation sync, and worker bootstrap
 - `server/config.js`: filesystem roots and static server paths
 - `server/dev_server.js`: source-checkout dev supervisor used by `npm run dev`
 - `server/lib/utils/runtime_params.js`: shared runtime-parameter schema loading, validation, startup resolution, and frontend-exposure metadata
@@ -128,6 +131,8 @@ Core runtime contracts:
 - request identity is derived from the server-issued `space_session` cookie via router-side request context plus the auth service
 - the raw `space_session` cookie remains a browser bearer token, but `L2/<username>/meta/logins.json` stores only backend-keyed verifiers plus signed metadata, so reading app-side session files does not reveal a replayable cookie
 - password verifiers remain in `L2/<username>/meta/password.json`, but the SCRAM verifier is sealed with a backend-held key so the file is no longer self-sufficient
+- `WORKERS` defaults to `1`; when it is greater than `1`, the runtime forks HTTP workers, keeps the primary as the authoritative watchdog and unified state owner, lets workers perform normal request work and filesystem mutations locally, and publishes versioned state deltas or snapshots back out from the primary after those mutations commit
+- responses expose `Space-State-Version` and `Space-Worker`; requests may send `Space-State-Version` as a required minimum replicated version, and the router may briefly wait for worker catch-up before handling the request
 - runtime auth may switch to a single-user mode where every request resolves to the implicit `user` principal
 - `/login` stays the public password-login entry
 - `/enter` is the firmware-backed launcher route for launcher-eligible sessions: always in single-user runtime, and also for authenticated multi-user requests; unauthenticated multi-user requests are redirected to `/login`
@@ -159,6 +164,9 @@ The server relies on a small set of shared infrastructure contracts. Do not re-i
 - `server/lib/auth/service.js` is the canonical session and login service
 - `server/lib/auth/keys_manage.js` is the canonical backend auth-key loader, with shared-env override support and local `server/data/` fallback
 - `server/lib/utils/runtime_params.js` is the canonical parameter-resolution layer for startup env overrides, defaults, and frontend exposure
+- `server/server.js` owns the human-facing startup banner for direct serve launches and must print the shared Git-derived version without changing the separate listening-URL line that supervisor tooling parses
+- `server/runtime/request_mutations.js` is the canonical worker-side mutation capture and commit layer for clustered runtime writes
+- `server/runtime/state_system.js` is the canonical primary-owned shared state engine for cross-worker coordination, replicated index shards, primary-only challenge state, delta replay, and named locks
 - `server/lib/utils/project_version.js` is the canonical project-version resolver for both the CLI version command and page-shell version display
 - `app/L0/_all/mod/_core/framework/js/yaml-lite.js` is the canonical YAML parser and serializer for both browser and server code; server modules import it directly instead of maintaining a duplicate server-side helper
 - `server/lib/customware/layout.js` is the canonical logical-to-disk resolver for repo `L0` and configured writable `L1`/`L2` roots
@@ -168,7 +176,7 @@ Infrastructure rules:
 - keep file-access checks in shared helpers, not in endpoint-local logic
 - keep group and user access state derived from `group_index` and `user_index`, not re-parsed per request
 - keep file-list and path-discovery work index-backed instead of walking the filesystem ad hoc
-- refresh the watchdog after mutations that affect indexed filesystem, group, or auth state
+- commit indexed filesystem, group, or auth mutations through the shared watchdog mutation path so the primary publishes versioned state updates to every worker replica
 
 ## API Contract
 

@@ -49,7 +49,8 @@ Important behavior:
 - the browser cookie is a bearer token
 - the backend stores only a verifier plus signed metadata in `meta/logins.json`
 - unsigned or expired session records are rejected
-- revocation deletes the stored session record and refreshes the watchdog
+- revocation deletes the stored session record and republishes the changed auth file through the shared mutation commit path
+- in clustered runtime, cookie validation happens on workers from replicated auth index shards, while one-time login challenges live in the primary-only `login_challenge` area of the unified state system
 
 ## Password Contract
 
@@ -59,7 +60,8 @@ Important rules:
 
 - do not hand-author these files
 - only backend helpers that hold the seal key can create accepted payloads
-- legacy plaintext verifier files are migrated to sealed form during startup
+- legacy plaintext verifier files are migrated to sealed form during startup; in clustered runtime that initialization stays on the primary before workers begin serving
+- the auth service uses the shared state system for challenge coordination; there is no second in-memory login-challenge path in the runtime
 
 ## Single-User Runtime
 
@@ -81,6 +83,6 @@ This mode is used especially by packaged desktop flows.
 
 Important side effects:
 
-- user creation initializes the user directory, `meta/`, and `mod/`
+- user creation initializes the user directory, `meta/`, and `mod/`, and publishes the new auth files so incremental user indexing sees the new account immediately
 - password resets rewrite the sealed verifier and clear active sessions
 - guest users use randomized `guest_...` usernames

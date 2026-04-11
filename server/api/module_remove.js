@@ -1,6 +1,7 @@
 import { createHttpError, deleteAppPath } from "../lib/customware/file_access.js";
 import { normalizeMaxLayer } from "../lib/customware/layer_limit.js";
 import { normalizeModuleTargetPath, readModuleInfo } from "../lib/customware/module_manage.js";
+import { runTrackedMutation } from "../runtime/request_mutations.js";
 
 function readPayload(context) {
   return context.body && typeof context.body === "object" && !Buffer.isBuffer(context.body)
@@ -20,12 +21,6 @@ function readMaxLayer(context) {
   return normalizeMaxLayer(payload.maxLayer ?? context.params.maxLayer);
 }
 
-async function refreshWatchdog(context) {
-  if (context.watchdog && typeof context.watchdog.refresh === "function") {
-    await context.watchdog.refresh();
-  }
-}
-
 export async function post(context) {
   try {
     const targetPathInfo = normalizeModuleTargetPath(readTargetPath(context), {
@@ -34,15 +29,15 @@ export async function post(context) {
       username: context.user?.username,
       watchdog: context.watchdog
     });
-    const result = deleteAppPath({
-      path: targetPathInfo.projectPath,
-      projectRoot: context.projectRoot,
-      runtimeParams: context.runtimeParams,
-      username: context.user?.username,
-      watchdog: context.watchdog
-    });
-
-    await refreshWatchdog(context);
+    const result = await runTrackedMutation(context, async () =>
+      deleteAppPath({
+        path: targetPathInfo.projectPath,
+        projectRoot: context.projectRoot,
+        runtimeParams: context.runtimeParams,
+        username: context.user?.username,
+        watchdog: context.watchdog
+      })
+    );
 
     return {
       action: "deleted",

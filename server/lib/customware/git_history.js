@@ -7,6 +7,8 @@ import {
   normalizeHistoryLimit,
   normalizeHistoryOffset
 } from "../git/local_history.js";
+import { handleRuntimeAppPathMutations } from "../../runtime/app_path_mutations.js";
+import { recordCapturedProjectPathMutations } from "../../runtime/mutation_capture.js";
 import { getRuntimeGroupIndex } from "./group_runtime.js";
 import {
   normalizeAppProjectPath,
@@ -527,6 +529,8 @@ function scheduleLayerHistoryTarget(target, options = {}) {
 }
 
 function recordAppPathMutations(options = {}, projectPaths = []) {
+  recordCapturedProjectPathMutations(projectPaths);
+
   if (!options.quotaCacheUpdated) {
     invalidateUserFolderSizeCacheForProjectPaths(
       {
@@ -535,6 +539,10 @@ function recordAppPathMutations(options = {}, projectPaths = []) {
       },
       projectPaths
     );
+  }
+
+  if (handleRuntimeAppPathMutations(options, projectPaths)) {
+    return [];
   }
 
   if (suppressionDepth > 0 || !isCustomwareGitHistoryEnabled(options.runtimeParams)) {
@@ -747,6 +755,13 @@ async function rollbackLayerHistory(options = {}) {
     },
     [target.ownerProjectPath]
   );
+  recordAppPathMutations(
+    {
+      projectRoot: target.projectRoot,
+      runtimeParams: target.runtimeParams
+    },
+    [target.ownerProjectPath]
+  );
 
   return {
     ...result,
@@ -789,6 +804,13 @@ async function revertLayerHistoryCommit(options = {}) {
     }
   });
   invalidateUserFolderSizeCacheForProjectPaths(
+    {
+      projectRoot: target.projectRoot,
+      runtimeParams: target.runtimeParams
+    },
+    [target.ownerProjectPath]
+  );
+  recordAppPathMutations(
     {
       projectRoot: target.projectRoot,
       runtimeParams: target.runtimeParams

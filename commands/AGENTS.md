@@ -97,7 +97,8 @@ Runtime resolution rules:
 - process environment variables win over the schema `default`
 - only parameters with `frontend_exposed: true` are injected into page shells for frontend reads
 - `CUSTOMWARE_PATH`, when non-empty, is the parent directory that contains backend `L1/` and `L2/` writable roots
-- `CUSTOMWARE_GIT_HISTORY` enables optional adaptive-debounced per-owner local Git history repositories for writable `L1` and `L2` roots; it defaults to `false`
+- `WORKERS` sets the number of HTTP worker processes for `serve` and `supervise`; `1` keeps the single-process runtime
+- `CUSTOMWARE_GIT_HISTORY` enables optional adaptive-debounced per-owner local Git history repositories for writable `L1` and `L2` roots; it defaults to `true`
 - `USER_FOLDER_SIZE_LIMIT_BYTES` sets an optional byte cap for each on-disk `L2/<user>/` folder; `0` disables the cap
 - short-lived `user` and `group` commands flush pending local-history commits before returning when `CUSTOMWARE_GIT_HISTORY` is enabled
 
@@ -146,6 +147,7 @@ Current usage:
 - `node space serve`
 - `node space serve --host 0.0.0.0 --port 3000`
 - `node space serve PORT=0`
+- `node space serve WORKERS=4`
 - `node space serve PORT=3100 ALLOW_GUEST_USERS=false`
 
 Guidance:
@@ -153,6 +155,8 @@ Guidance:
 - keep `serve` focused on process startup and bootstrap overrides
 - keep `--host` and `--port` as aliases of the shared `HOST` and `PORT` runtime parameters
 - keep `PORT=0` available as the explicit OS-assigned free-port mode used by the desktop host and other ephemeral local-runtime flows
+- keep `WORKERS` wired through the shared runtime-param schema instead of adding a separate cluster-only flag; the runtime uses one authoritative primary state host plus parallel HTTP workers
+- print the shared Git-derived project version on startup through `server/lib/utils/project_version.js`, while preserving the existing `space server listening at ...` line as a separate line for supervisor readiness parsing
 - prefer `node space set CUSTOMWARE_PATH <path>` before user or group creation when documenting persistent writable-root setup, because launch-only `CUSTOMWARE_PATH=...` overrides affect only that `serve` process
 - do not move application behavior into the command when it belongs in `server/`
 
@@ -187,6 +191,7 @@ Current usage:
 
 - `node space supervise CUSTOMWARE_PATH=/srv/space/customware`
 - `node space supervise --host 0.0.0.0 --port 3000 CUSTOMWARE_PATH=/srv/space/customware`
+- `node space supervise WORKERS=8 CUSTOMWARE_PATH=/srv/space/customware`
 - `node space supervise --branch main --auto-update-interval 300 CUSTOMWARE_PATH=/srv/space/customware`
 - `node space supervise --auto-update-interval 0 CUSTOMWARE_PATH=/srv/space/customware`
 

@@ -17,6 +17,7 @@ function createDesktopRuntimeParamOverrides() {
   const overrides = {};
 
   if (app.isPackaged) {
+    overrides.WORKERS = "1";
     overrides.SINGLE_USER_APP = "true";
     overrides.CUSTOMWARE_PATH = path.join(app.getPath("userData"), "customware");
   }

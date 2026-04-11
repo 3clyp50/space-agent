@@ -8,7 +8,7 @@ function createHttpError(message, statusCode) {
   return error;
 }
 
-export function post(context) {
+export async function post(context) {
   if (isSingleUserApp(context.runtimeParams)) {
     throw createHttpError("Password login is disabled in single-user mode.", 403);
   }
@@ -19,7 +19,7 @@ export function post(context) {
       : {};
 
   try {
-    return context.auth.createLoginChallenge({
+    return await context.auth.createLoginChallenge({
       clientNonce: payload.clientNonce,
       req: context.req,
       username: payload.username

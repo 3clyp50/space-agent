@@ -1,4 +1,5 @@
 import { createHttpError, deleteAppPath, deleteAppPaths } from "../lib/customware/file_access.js";
+import { runTrackedMutation } from "../runtime/request_mutations.js";
 
 function readPayload(context) {
   return context.body && typeof context.body === "object" && !Buffer.isBuffer(context.body)
@@ -19,21 +20,18 @@ async function handleDelete(context) {
   const payload = readPayload(context);
 
   try {
-    const options = {
-      path: readPath(context),
-      paths: payload.paths,
-      projectRoot: context.projectRoot,
-      runtimeParams: context.runtimeParams,
-      username: context.user?.username,
-      watchdog: context.watchdog
-    };
-    const result = hasBatchDelete(payload) ? deleteAppPaths(options) : deleteAppPath(options);
+    return await runTrackedMutation(context, async () => {
+      const options = {
+        path: readPath(context),
+        paths: payload.paths,
+        projectRoot: context.projectRoot,
+        runtimeParams: context.runtimeParams,
+        username: context.user?.username,
+        watchdog: context.watchdog
+      };
 
-    if (context.watchdog && typeof context.watchdog.refresh === "function") {
-      await context.watchdog.refresh();
-    }
-
-    return result;
+      return hasBatchDelete(payload) ? deleteAppPaths(options) : deleteAppPath(options);
+    });
   } catch (error) {
     throw createHttpError(error.message || "File delete failed.", Number(error.statusCode) || 500);
   }

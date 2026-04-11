@@ -92,7 +92,14 @@ function createUserInternal(projectRoot, username, password, options = {}, authK
       projectRoot,
       runtimeParams
     },
-    [`/app/L2/${normalizedUsername}/`]
+    [
+      `/app/L2/${normalizedUsername}/`,
+      `/app/L2/${normalizedUsername}/meta/`,
+      `/app/L2/${normalizedUsername}/meta/logins.json`,
+      `/app/L2/${normalizedUsername}/meta/password.json`,
+      `/app/L2/${normalizedUsername}/mod/`,
+      `/app/L2/${normalizedUsername}/user.yaml`
+    ]
   );
 
   return {

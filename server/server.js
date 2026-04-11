@@ -1,17 +1,37 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createAgentServer } from "./app.js";
+import { createAgentServer, createServerBootstrap } from "./app.js";
+import { resolveProjectVersion } from "./lib/utils/project_version.js";
+import { normalizeWorkerCount, startClusteredServer } from "./runtime/cluster.js";
 
 async function startServer(overrides = {}) {
-  const app = await createAgentServer(overrides);
+  const serverBootstrap = overrides.serverBootstrap || (await createServerBootstrap(overrides));
+  const workerCount = normalizeWorkerCount(serverBootstrap.runtimeParams);
+
+  if (workerCount > 1) {
+    return startClusteredServer({
+      ...overrides,
+      serverBootstrap
+    });
+  }
+
+  const app = await createAgentServer({
+    ...overrides,
+    serverBootstrap
+  });
   await app.listen();
   return app;
 }
 
+function logServerStartup(server, projectRoot) {
+  console.log(`space server version ${resolveProjectVersion(projectRoot)}`);
+  console.log(`space server listening at ${server.browserUrl}`);
+}
+
 async function runServeCli(overrides = {}) {
   const app = await startServer(overrides);
-  console.log(`space server listening at ${app.browserUrl}`);
+  logServerStartup(app, overrides.projectRoot);
   return app;
 }
 
@@ -25,4 +45,4 @@ if (process.argv[1] && path.resolve(process.argv[1]) === currentFilePath) {
   });
 }
 
-export { runServeCli, startServer };
+export { logServerStartup, runServeCli, startServer };

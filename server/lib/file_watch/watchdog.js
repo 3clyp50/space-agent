@@ -9,6 +9,19 @@ import {
 } from "../customware/layout.js";
 import { globToRegExp, normalizePathSegment } from "../utils/app_files.js";
 import { parseSimpleYaml } from "../../../app/L0/_all/mod/_core/framework/js/yaml-lite.js";
+import { createStateSystem } from "../../runtime/state_system.js";
+import {
+  FILE_INDEX_AREA,
+  buildFileIndexShardValue,
+  buildGroupIndexShardChanges,
+  buildUserIndexShardChanges,
+  collectAffectedUsernames,
+  collectFileIndexShardIds,
+  collectFileIndexShardIdsFromProjectPaths,
+  createRuntimeGroupIndexFromAreas,
+  createRuntimeUserIndexFromAreas,
+  hasGroupConfigChange
+} from "./state_shards.js";
 
 const REFRESH_DEBOUNCE_MS = 75;
 const RECONCILE_INTERVAL_MS = 1_000;
@@ -29,6 +42,14 @@ export class WatchdogHandler {
 
   getState() {
     return this.state;
+  }
+
+  restoreState(serializedState) {
+    this.state = serializedState ?? this.createInitialState();
+  }
+
+  serializeState(state = this.state) {
+    return state;
   }
 
   async onStart(_context) {}
@@ -120,6 +141,50 @@ function getStatsSignature(stats) {
   return `${Math.trunc(stats.mtimeMs)}:${stats.size}`;
 }
 
+function clonePathIndex(pathIndex = Object.create(null)) {
+  const nextPathIndex = Object.create(null);
+
+  Object.entries(pathIndex || {}).forEach(([projectPath, metadata]) => {
+    nextPathIndex[projectPath] =
+      metadata && typeof metadata === "object" && !Array.isArray(metadata)
+        ? { ...metadata }
+        : metadata;
+  });
+
+  return nextPathIndex;
+}
+
+function createPathIndexEntry(stats, options = {}) {
+  if (!stats) {
+    return null;
+  }
+
+  const isDirectory =
+    options.isDirectory === undefined ? stats.isDirectory() : Boolean(options.isDirectory);
+
+  return {
+    isDirectory,
+    mtimeMs: Math.trunc(Number(stats.mtimeMs || 0)),
+    sizeBytes: isDirectory ? 0 : Number(stats.size || 0)
+  };
+}
+
+function isPathIndexEntryEqual(left, right) {
+  if (!left && !right) {
+    return true;
+  }
+
+  if (!left || !right) {
+    return false;
+  }
+
+  return (
+    Boolean(left.isDirectory) === Boolean(right.isDirectory) &&
+    Number(left.mtimeMs || 0) === Number(right.mtimeMs || 0) &&
+    Number(left.sizeBytes || 0) === Number(right.sizeBytes || 0)
+  );
+}
+
 function loadWatchdogConfig(configPath) {
   const sourceText = tryReadTextFile(configPath);
 
@@ -179,6 +244,21 @@ function loadWatchdogConfig(configPath) {
     handlers: handlerConfigs,
     patterns: uniquePatterns
   };
+}
+
+function cloneWatchConfig(watchConfig = {}) {
+  return {
+    handlers: Array.isArray(watchConfig.handlers)
+      ? watchConfig.handlers.map((handler) => ({
+          name: String(handler.name || ""),
+          patterns: Array.isArray(handler.patterns) ? [...handler.patterns] : []
+        }))
+      : []
+  };
+}
+
+function getWatchConfigSignature(watchConfig = {}) {
+  return JSON.stringify(cloneWatchConfig(watchConfig));
 }
 
 function getFixedPatternPrefix(pattern) {
@@ -358,6 +438,30 @@ async function loadConfiguredHandlers(handlerDir, handlerConfigs, projectRoot, r
   return configuredHandlers;
 }
 
+function expandProjectSyncTargets(projectPaths = []) {
+  const expandedTargets = new Set();
+
+  for (const projectPath of Array.isArray(projectPaths) ? projectPaths : []) {
+    const normalizedProjectPath = normalizeProjectPath(projectPath, {
+      isDirectory: String(projectPath || "").endsWith("/")
+    });
+
+    if (!normalizedProjectPath) {
+      continue;
+    }
+
+    expandedTargets.add(normalizedProjectPath);
+
+    const segments = stripTrailingSlash(normalizedProjectPath).split("/").filter(Boolean);
+
+    for (let segmentCount = segments.length - 1; segmentCount >= 2; segmentCount -= 1) {
+      expandedTargets.add(`/${segments.slice(0, segmentCount).join("/")}/`);
+    }
+  }
+
+  return [...expandedTargets];
+}
+
 export function createWatchdog(options = {}) {
   const projectRoot = path.resolve(options.projectRoot || path.join(CURRENT_DIR, "..", "..", ".."));
   const runtimeParams = options.runtimeParams || null;
@@ -365,21 +469,245 @@ export function createWatchdog(options = {}) {
   const handlerDir = path.resolve(options.handlerDir || path.join(CURRENT_DIR, "handlers"));
   const reconcileIntervalMs = Number(options.reconcileIntervalMs ?? RECONCILE_INTERVAL_MS);
   const watchConfig = options.watchConfig !== false;
+  const replica = options.replica === true;
+  const initialSnapshot = options.initialSnapshot || null;
+  const stateSystem =
+    options.stateSystem ||
+    createStateSystem({
+      replica,
+      version: Number(initialSnapshot?.version) || 0
+    });
+  const replicatedAreaState = Object.create(null);
   let compiledPatterns = [];
   let configuredHandlers = [];
   let currentPathIndex = Object.create(null);
   let lastConfigSignature = "";
-  let started = false;
-  let refreshInProgress = false;
-  let pendingRefresh = false;
-  let refreshTimer = null;
-  let pathSyncInProgress = false;
+  let operationQueue = Promise.resolve();
   let pathSyncTimer = null;
   let reconcileTimer = null;
   let configWatcher = null;
+  let started = false;
+  let watchConfigState = { handlers: [] };
+  let watchConfigSignature = getWatchConfigSignature(watchConfigState);
+  let cachedGroupIndex = null;
+  let cachedGroupIndexVersion = -1;
+  let cachedUserIndex = null;
+  let cachedUserIndexVersion = -1;
   const pendingChangedPaths = new Set();
   const directoryWatchers = new Map();
   const handlerStates = new Map();
+  const snapshotListeners = new Set();
+
+  function cloneValue(value) {
+    if (value === null || value === undefined || typeof value !== "object") {
+      return value;
+    }
+
+    if (typeof structuredClone === "function") {
+      return structuredClone(value);
+    }
+
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function sortStrings(values = []) {
+    return [...new Set((Array.isArray(values) ? values : []).filter(Boolean))].sort((left, right) =>
+      left.localeCompare(right)
+    );
+  }
+
+  function getCurrentVersion() {
+    return stateSystem.getVersion();
+  }
+
+  function enqueueOperation(task) {
+    const operation = operationQueue.then(task, task);
+    operationQueue = operation.catch(() => {});
+    return operation;
+  }
+
+  function emitSnapshotEvent(event = {}) {
+    const normalizedEvent = {
+      ...event,
+      version: Number(event.version ?? getCurrentVersion()) || getCurrentVersion()
+    };
+
+    for (const listener of snapshotListeners) {
+      try {
+        listener(normalizedEvent);
+      } catch (error) {
+        console.error("Watchdog snapshot subscriber failed.");
+        console.error(error);
+      }
+    }
+  }
+
+  function resetDerivedIndexCaches() {
+    cachedGroupIndex = null;
+    cachedGroupIndexVersion = -1;
+    cachedUserIndex = null;
+    cachedUserIndexVersion = -1;
+  }
+
+  function updateWatchConfigState(handlerConfigs = []) {
+    watchConfigState = {
+      handlers: handlerConfigs.map((handlerConfig) => ({
+        name: handlerConfig.name,
+        patterns: [...handlerConfig.patterns]
+      }))
+    };
+    watchConfigSignature = getWatchConfigSignature(watchConfigState);
+  }
+
+  async function configureHandlers(nextConfig) {
+    configuredHandlers = await loadConfiguredHandlers(
+      handlerDir,
+      nextConfig.handlers,
+      projectRoot,
+      runtimeParams
+    );
+    compiledPatterns = createCompiledPatterns(nextConfig.patterns);
+    updateWatchConfigState(nextConfig.handlers);
+  }
+
+  function ensureReplicatedArea(area) {
+    if (!replicatedAreaState[area]) {
+      replicatedAreaState[area] = Object.create(null);
+    }
+
+    return replicatedAreaState[area];
+  }
+
+  function removeReplicatedAreaIfEmpty(area) {
+    if (replicatedAreaState[area] && Object.keys(replicatedAreaState[area]).length === 0) {
+      delete replicatedAreaState[area];
+    }
+  }
+
+  function rebuildCurrentPathIndexFromReplicatedState() {
+    const nextPathIndex = Object.create(null);
+    const fileIndexArea = replicatedAreaState[FILE_INDEX_AREA] || Object.create(null);
+
+    Object.values(fileIndexArea).forEach((shardValue) => {
+      Object.entries(shardValue || Object.create(null)).forEach(([projectPath, metadata]) => {
+        nextPathIndex[projectPath] =
+          metadata && typeof metadata === "object" && !Array.isArray(metadata)
+            ? { ...metadata }
+            : metadata;
+      });
+    });
+
+    currentPathIndex = nextPathIndex;
+  }
+
+  function applyFileShardToCurrentPathIndex(shardId, nextShardValue) {
+    const fileIndexArea = ensureReplicatedArea(FILE_INDEX_AREA);
+    const previousShardValue = fileIndexArea[shardId] || Object.create(null);
+
+    Object.keys(previousShardValue).forEach((projectPath) => {
+      delete currentPathIndex[projectPath];
+    });
+
+    if (!nextShardValue || Object.keys(nextShardValue).length === 0) {
+      delete fileIndexArea[shardId];
+      removeReplicatedAreaIfEmpty(FILE_INDEX_AREA);
+      return;
+    }
+
+    const clonedShardValue = clonePathIndex(nextShardValue);
+    fileIndexArea[shardId] = clonedShardValue;
+
+    Object.entries(clonedShardValue).forEach(([projectPath, metadata]) => {
+      currentPathIndex[projectPath] = { ...metadata };
+    });
+  }
+
+  function hydrateReplicatedAreaState(state = {}) {
+    Object.keys(replicatedAreaState).forEach((area) => {
+      delete replicatedAreaState[area];
+    });
+
+    Object.entries(state || {}).forEach(([area, areaValues]) => {
+      if (!areaValues || typeof areaValues !== "object" || Array.isArray(areaValues)) {
+        return;
+      }
+
+      const nextArea = ensureReplicatedArea(area);
+
+      Object.entries(areaValues).forEach(([id, value]) => {
+        nextArea[id] =
+          area === FILE_INDEX_AREA
+            ? clonePathIndex(value)
+            : cloneValue(value);
+      });
+    });
+
+    rebuildCurrentPathIndexFromReplicatedState();
+    resetDerivedIndexCaches();
+  }
+
+  function applyReplicatedChangesToAreaState(changes = []) {
+    const changedAreas = new Set();
+
+    (Array.isArray(changes) ? changes : []).forEach((change) => {
+      const area = String(change?.area || "").trim();
+      const id = String(change?.id || "").trim();
+
+      if (!area || !id) {
+        return;
+      }
+
+      changedAreas.add(area);
+
+      if (area === FILE_INDEX_AREA) {
+        applyFileShardToCurrentPathIndex(id, change.deleted ? null : change.value || Object.create(null));
+        return;
+      }
+
+      const targetArea = ensureReplicatedArea(area);
+
+      if (change.deleted) {
+        delete targetArea[id];
+        removeReplicatedAreaIfEmpty(area);
+        return;
+      }
+
+      targetArea[id] = cloneValue(change.value);
+    });
+
+    if (
+      changedAreas.has("group_index") ||
+      changedAreas.has("group_meta") ||
+      changedAreas.has("group_user_index") ||
+      changedAreas.has("session_index") ||
+      changedAreas.has("user_error_index") ||
+      changedAreas.has("user_index")
+    ) {
+      resetDerivedIndexCaches();
+    }
+  }
+
+  function getRuntimeUserIndex() {
+    const currentVersion = getCurrentVersion();
+
+    if (!cachedUserIndex || cachedUserIndexVersion !== currentVersion) {
+      cachedUserIndex = createRuntimeUserIndexFromAreas(replicatedAreaState);
+      cachedUserIndexVersion = currentVersion;
+    }
+
+    return cachedUserIndex;
+  }
+
+  function getRuntimeGroupIndex() {
+    const currentVersion = getCurrentVersion();
+
+    if (!cachedGroupIndex || cachedGroupIndexVersion !== currentVersion) {
+      cachedGroupIndex = createRuntimeGroupIndexFromAreas(replicatedAreaState);
+      cachedGroupIndexVersion = currentVersion;
+    }
+
+    return cachedGroupIndex;
+  }
 
   function removeCurrentEntries(projectPath) {
     const normalizedBase = stripTrailingSlash(normalizeProjectPath(projectPath));
@@ -402,29 +730,54 @@ export function createWatchdog(options = {}) {
     return changed;
   }
 
+  function resolvePathIndexRecord(absolutePath, entryOptions = {}) {
+    const stats = entryOptions.stats || tryStat(absolutePath);
+    const isDirectory =
+      entryOptions.isDirectory === undefined ? stats?.isDirectory() : Boolean(entryOptions.isDirectory);
+    const projectPath = stats
+      ? toProjectPath(projectRoot, absolutePath, {
+          isDirectory,
+          runtimeParams
+        })
+      : "";
+
+    if (!stats || !projectPath) {
+      return null;
+    }
+
+    if (isIgnoredProjectPath(projectPath) || !matchesCompiledPatterns(compiledPatterns, projectPath)) {
+      return {
+        entry: null,
+        projectPath
+      };
+    }
+
+    return {
+      entry: createPathIndexEntry(stats, {
+        isDirectory
+      }),
+      projectPath
+    };
+  }
+
   function upsertCurrentEntry(absolutePath, entryOptions = {}) {
-    const projectPath = toProjectPath(projectRoot, absolutePath, {
-      ...entryOptions,
-      runtimeParams
-    });
+    const record = resolvePathIndexRecord(absolutePath, entryOptions);
 
-    if (!projectPath) {
+    if (!record) {
       return false;
     }
 
-    if (isIgnoredProjectPath(projectPath)) {
-      return removeCurrentEntries(projectPath);
+    if (!record.entry) {
+      return removeCurrentEntries(record.projectPath);
     }
 
-    if (!matchesCompiledPatterns(compiledPatterns, projectPath)) {
-      return removeCurrentEntries(projectPath);
-    }
+    const existingEntry = currentPathIndex[record.projectPath];
 
-    if (currentPathIndex[projectPath] === true) {
+    if (isPathIndexEntryEqual(existingEntry, record.entry)) {
       return false;
     }
 
-    currentPathIndex[projectPath] = true;
+    currentPathIndex[record.projectPath] = record.entry;
     return true;
   }
 
@@ -445,23 +798,20 @@ export function createWatchdog(options = {}) {
       walkDirectories(scanRoot, directories);
 
       directories.forEach((directoryPath) => {
-        const projectPath = toProjectPath(projectRoot, directoryPath, {
-          isDirectory: true,
-          runtimeParams
+        const record = resolvePathIndexRecord(directoryPath, {
+          isDirectory: true
         });
 
-        if (projectPath && matchesCompiledPatterns(compiledPatterns, projectPath)) {
-          nextPathIndex[projectPath] = true;
+        if (record?.entry) {
+          nextPathIndex[record.projectPath] = record.entry;
         }
       });
 
       walkFiles(scanRoot, (filePath) => {
-        const projectPath = toProjectPath(projectRoot, filePath, {
-          runtimeParams
-        });
+        const record = resolvePathIndexRecord(filePath);
 
-        if (projectPath && matchesCompiledPatterns(compiledPatterns, projectPath)) {
-          nextPathIndex[projectPath] = true;
+        if (record?.entry) {
+          nextPathIndex[record.projectPath] = record.entry;
         }
       });
     }
@@ -470,11 +820,14 @@ export function createWatchdog(options = {}) {
   }
 
   function createCurrentChangeFromProjectPath(projectPath) {
+    const metadata = currentPathIndex[projectPath] || null;
+
     return {
       absolutePath: toAbsolutePath(projectRoot, projectPath, runtimeParams),
       exists: true,
-      isDirectory: projectPath.endsWith("/"),
+      isDirectory: Boolean(metadata?.isDirectory ?? projectPath.endsWith("/")),
       kind: "upsert",
+      metadata: metadata ? { ...metadata } : null,
       projectPath
     };
   }
@@ -488,6 +841,9 @@ export function createWatchdog(options = {}) {
         exists: true,
         isDirectory: true,
         kind: "upsert",
+        metadata: createPathIndexEntry(stats, {
+          isDirectory: true
+        }),
         projectPath: toProjectPath(projectRoot, absolutePath, {
           isDirectory: true,
           runtimeParams
@@ -501,6 +857,9 @@ export function createWatchdog(options = {}) {
         exists: true,
         isDirectory: false,
         kind: "upsert",
+        metadata: createPathIndexEntry(stats, {
+          isDirectory: false
+        }),
         projectPath: toProjectPath(projectRoot, absolutePath, {
           runtimeParams
         })
@@ -519,6 +878,7 @@ export function createWatchdog(options = {}) {
       exists: false,
       isDirectory: deletedPath.isDirectory,
       kind: "delete",
+      metadata: null,
       projectPath: deletedPath.projectPath
     };
   }
@@ -529,15 +889,28 @@ export function createWatchdog(options = {}) {
 
   function createHandlerContext(configuredHandler, matchingChanges = []) {
     return {
-      changes: matchingChanges.map((change) => ({ ...change })),
+      changes: matchingChanges.map((change) => ({
+        ...change,
+        metadata:
+          change.metadata && typeof change.metadata === "object" && !Array.isArray(change.metadata)
+            ? { ...change.metadata }
+            : change.metadata
+      })),
       getCurrentPathIndex() {
-        return { ...currentPathIndex };
+        return clonePathIndex(currentPathIndex);
       },
       getCurrentPaths() {
         return getCurrentPaths();
       },
       getIndex(name) {
-        return handlerStates.get(name);
+        if (name === "path_index") {
+          return clonePathIndex(currentPathIndex);
+        }
+
+        return handlerStates.get(name) || null;
+      },
+      getSnapshotVersion() {
+        return getCurrentVersion();
       },
       getWatchedPaths() {
         return [...configuredHandler.patterns];
@@ -555,6 +928,10 @@ export function createWatchdog(options = {}) {
       .map((projectPath) => createCurrentChangeFromProjectPath(projectPath));
   }
 
+  function syncHandlerState(configuredHandler) {
+    handlerStates.set(configuredHandler.name, configuredHandler.instance.getState());
+  }
+
   async function initializeHandlers() {
     handlerStates.clear();
 
@@ -565,7 +942,7 @@ export function createWatchdog(options = {}) {
           getCurrentMatchingChanges(configuredHandler.compiledPatterns)
         )
       );
-      handlerStates.set(configuredHandler.name, configuredHandler.instance.getState());
+      syncHandlerState(configuredHandler);
     }
   }
 
@@ -586,7 +963,7 @@ export function createWatchdog(options = {}) {
       }
 
       await configuredHandler.instance.onChanges(createHandlerContext(configuredHandler, matchingChanges));
-      handlerStates.set(configuredHandler.name, configuredHandler.instance.getState());
+      syncHandlerState(configuredHandler);
     }
   }
 
@@ -602,7 +979,7 @@ export function createWatchdog(options = {}) {
   }
 
   function schedulePathSync(targetPath) {
-    if (hasIgnoredPathSegment(targetPath)) {
+    if (replica || hasIgnoredPathSegment(targetPath)) {
       return;
     }
 
@@ -621,7 +998,7 @@ export function createWatchdog(options = {}) {
   }
 
   function watchDirectory(directoryPath) {
-    if (directoryWatchers.has(directoryPath)) {
+    if (replica || directoryWatchers.has(directoryPath)) {
       return;
     }
 
@@ -687,21 +1064,29 @@ export function createWatchdog(options = {}) {
       return removeCurrentEntries(deletedPath.projectPath);
     }
 
-    let changed = removeCurrentEntries(
-      toProjectPath(projectRoot, targetPath, {
-        isDirectory: stats.isDirectory(),
-        runtimeParams
-      })
-    );
+    const projectPath = toProjectPath(projectRoot, targetPath, {
+      isDirectory: stats.isDirectory(),
+      runtimeParams
+    });
+    let changed = removeCurrentEntries(projectPath);
 
     if (stats.isDirectory()) {
-      watchDirectoryTree(targetPath);
-      changed = upsertCurrentEntry(targetPath, { isDirectory: true }) || changed;
+      if (!replica) {
+        watchDirectoryTree(targetPath);
+      }
+
+      changed = upsertCurrentEntry(targetPath, {
+        isDirectory: true,
+        stats
+      }) || changed;
 
       const directories = new Set();
       walkDirectories(targetPath, directories);
       directories.forEach((directoryPath) => {
-        changed = upsertCurrentEntry(directoryPath, { isDirectory: true }) || changed;
+        changed =
+          upsertCurrentEntry(directoryPath, {
+            isDirectory: true
+          }) || changed;
       });
 
       walkFiles(targetPath, (filePath) => {
@@ -712,55 +1097,314 @@ export function createWatchdog(options = {}) {
     }
 
     removeDirectoryWatchersUnder(targetPath);
-    return upsertCurrentEntry(targetPath) || changed;
+    return upsertCurrentEntry(targetPath, {
+      isDirectory: false,
+      stats
+    }) || changed;
+  }
+
+  function buildReplicatedStateChanges(options = {}) {
+    const fullReshard = options.fullReshard === true;
+    const changes = Array.isArray(options.changes) ? options.changes : [];
+    const previousUserIndex = options.previousUserIndex || getRuntimeUserIndex();
+    const previousGroupIndex = options.previousGroupIndex || getRuntimeGroupIndex();
+    const nextUserIndex = handlerStates.get("user_index") || getRuntimeUserIndex();
+    const nextGroupIndex = handlerStates.get("group_index") || getRuntimeGroupIndex();
+    const stateChanges = [];
+    const previousFileShardIds = Object.keys(replicatedAreaState[FILE_INDEX_AREA] || Object.create(null));
+    const nextFileShardIds = collectFileIndexShardIds(currentPathIndex);
+    const fileShardIds = fullReshard
+      ? sortStrings([...previousFileShardIds, ...nextFileShardIds])
+      : collectFileIndexShardIdsFromProjectPaths(changes.map((change) => change.projectPath));
+
+    fileShardIds.forEach((shardId) => {
+      const shardValue = buildFileIndexShardValue(currentPathIndex, shardId);
+
+      stateChanges.push(
+        Object.keys(shardValue).length > 0
+          ? {
+              area: FILE_INDEX_AREA,
+              id: shardId,
+              value: shardValue
+            }
+          : {
+              area: FILE_INDEX_AREA,
+              deleted: true,
+              id: shardId
+            }
+      );
+    });
+
+    const affectedUsernames = fullReshard
+      ? sortStrings([
+          ...Object.keys(previousUserIndex?.users || Object.create(null)),
+          ...Object.keys(nextUserIndex?.users || Object.create(null))
+        ])
+      : collectAffectedUsernames(changes);
+
+    if (affectedUsernames.length > 0) {
+      stateChanges.push(
+        ...buildUserIndexShardChanges(previousUserIndex, nextUserIndex, affectedUsernames)
+      );
+    }
+
+    if (fullReshard || hasGroupConfigChange(changes)) {
+      stateChanges.push(...buildGroupIndexShardChanges(previousGroupIndex, nextGroupIndex));
+    }
+
+    return stateChanges;
+  }
+
+  function commitReplicatedState(options = {}) {
+    const result = stateSystem.commitEntries(
+      buildReplicatedStateChanges({
+        changes: options.changes,
+        fullReshard: options.fullReshard,
+        previousGroupIndex: options.previousGroupIndex,
+        previousUserIndex: options.previousUserIndex
+      })
+    );
+
+    if (Array.isArray(result.changes) && result.changes.length > 0) {
+      applyReplicatedChangesToAreaState(result.changes);
+    }
+
+    const forceSnapshot = options.forceSnapshot === true;
+    const snapshot = forceSnapshot ? getSnapshot() : null;
+    const projectPaths =
+      Array.isArray(options.projectPaths) && options.projectPaths.length > 0
+        ? [...options.projectPaths]
+        : [];
+
+    if (options.emit !== false) {
+      if (snapshot) {
+        emitSnapshotEvent({
+          projectPaths,
+          snapshot,
+          type: "snapshot",
+          version: result.version
+        });
+      } else if (result.delta) {
+        emitSnapshotEvent({
+          delta: result.delta,
+          projectPaths,
+          type: "delta",
+          version: result.version
+        });
+      }
+    }
+
+    return {
+      delta: result.delta,
+      snapshot,
+      version: result.version
+    };
+  }
+
+  async function applyAbsolutePathChanges(absolutePaths, options = {}) {
+    if (replica) {
+      throw new Error("Replica watchdogs cannot apply filesystem path changes directly.");
+    }
+
+    const pathsToSync = [...new Set((absolutePaths || []).filter(Boolean))];
+
+    if (pathsToSync.length === 0) {
+      return {
+        delta: null,
+        projectPaths: [],
+        version: getCurrentVersion()
+      };
+    }
+
+    let changed = false;
+    const changes = [];
+    const previousUserIndex = handlerStates.get("user_index") || getRuntimeUserIndex();
+    const previousGroupIndex = handlerStates.get("group_index") || getRuntimeGroupIndex();
+
+    for (const targetPath of pathsToSync) {
+      const change = createChangeEvent(targetPath);
+
+      if (change.projectPath && isIgnoredProjectPath(change.projectPath)) {
+        continue;
+      }
+
+      changes.push(change);
+
+      if (syncAbsolutePath(targetPath)) {
+        changed = true;
+      }
+    }
+
+    const projectPathsToEmit =
+      Array.isArray(options.projectPaths) && options.projectPaths.length > 0
+        ? [
+            ...new Set(
+              options.projectPaths
+                .map((value) =>
+                  normalizeProjectPath(value, {
+                    isDirectory: String(value || "").endsWith("/")
+                  })
+                )
+                .filter(Boolean)
+            )
+          ]
+        : [...new Set(changes.map((change) => change.projectPath).filter(Boolean))];
+
+    if (!changed && changes.length === 0) {
+      return {
+        changed: false,
+        delta: null,
+        projectPaths: projectPathsToEmit,
+        version: getCurrentVersion()
+      };
+    }
+
+    await notifyHandlers(changes);
+
+    const stateCommit = commitReplicatedState({
+      changes,
+      emit: options.emit,
+      projectPaths: projectPathsToEmit,
+      previousGroupIndex,
+      previousUserIndex
+    });
+
+    return {
+      changed,
+      delta: stateCommit.delta,
+      projectPaths: projectPathsToEmit,
+      snapshot: stateCommit.snapshot,
+      version: stateCommit.version
+    };
+  }
+
+  function getConfiguredHandlers() {
+    return cloneWatchConfig(watchConfigState).handlers;
+  }
+
+  function getWatchConfig() {
+    return cloneWatchConfig(watchConfigState);
+  }
+
+  function getSnapshot() {
+    const stateSnapshot = stateSystem.getReplicatedSnapshot();
+
+    return {
+      state: stateSnapshot.state,
+      version: stateSnapshot.version,
+      watchConfig: getWatchConfig()
+    };
+  }
+
+  async function applySnapshotInternal(snapshot = {}, options = {}) {
+    if (Number.isFinite(snapshot.version) && Number(snapshot.version) < getCurrentVersion()) {
+      return getSnapshot();
+    }
+
+    const nextWatchConfig = cloneWatchConfig(snapshot.watchConfig);
+    const nextWatchConfigSignature = getWatchConfigSignature(nextWatchConfig);
+
+    if (
+      nextWatchConfig.handlers.length > 0 &&
+      (nextWatchConfigSignature !== watchConfigSignature || configuredHandlers.length === 0)
+    ) {
+      const handlerConfigs = nextWatchConfig.handlers.map((handlerConfig) => ({
+        name: handlerConfig.name,
+        patterns: [...handlerConfig.patterns]
+      }));
+
+      await configureHandlers({
+        handlers: handlerConfigs,
+        patterns: handlerConfigs.flatMap((handlerConfig) => handlerConfig.patterns)
+      });
+    }
+
+    stateSystem.applySnapshot({
+      state: snapshot.state,
+      version: snapshot.version
+    });
+    hydrateReplicatedAreaState(snapshot.state);
+
+    if (options.emit !== false) {
+      emitSnapshotEvent({
+        snapshot: getSnapshot(),
+        type: "snapshot",
+        version: getCurrentVersion()
+      });
+    }
+
+    return getSnapshot();
+  }
+
+  async function applyDeltaInternal(delta = {}, options = {}) {
+    const result = stateSystem.applyDelta(delta);
+
+    if (result.applied) {
+      applyReplicatedChangesToAreaState(delta.changes);
+    }
+
+    if (options.emit !== false && result.applied) {
+      emitSnapshotEvent({
+        delta,
+        type: "delta",
+        version: getCurrentVersion()
+      });
+    }
+
+    return {
+      applied: result.applied,
+      version: getCurrentVersion()
+    };
+  }
+
+  async function refreshInternal() {
+    if (replica) {
+      return getSnapshot();
+    }
+
+    const previousWatchConfigSignature = watchConfigSignature;
+    const previousUserIndex = handlerStates.get("user_index") || getRuntimeUserIndex();
+    const previousGroupIndex = handlerStates.get("group_index") || getRuntimeGroupIndex();
+    const nextConfig = loadWatchdogConfig(configPath);
+
+    await configureHandlers(nextConfig);
+    lastConfigSignature = getStatsSignature(tryStat(configPath));
+    rebuildCurrentPathIndex();
+
+    const nextDirectories = new Set();
+
+    for (const { pattern } of compiledPatterns) {
+      const fixedPrefix = getFixedPatternPrefix(pattern);
+
+      for (const scanRoot of listProjectScanRoots(projectRoot, fixedPrefix, runtimeParams)) {
+        const baseDirectory = getExistingWatchBase(scanRoot);
+        walkDirectories(baseDirectory, nextDirectories);
+      }
+    }
+
+    closeRemovedWatchers(nextDirectories);
+
+    for (const directoryPath of nextDirectories) {
+      watchDirectory(directoryPath);
+    }
+
+    await initializeHandlers();
+
+    const configChanged = previousWatchConfigSignature !== watchConfigSignature;
+
+    commitReplicatedState({
+      emit: true,
+      forceSnapshot: configChanged,
+      fullReshard: true,
+      previousGroupIndex,
+      previousUserIndex
+    });
+
+    return getSnapshot();
   }
 
   async function refresh() {
-    if (refreshInProgress || pathSyncInProgress) {
-      pendingRefresh = true;
-      return;
-    }
-
-    refreshInProgress = true;
-
-    try {
-      const nextConfig = loadWatchdogConfig(configPath);
-      configuredHandlers = await loadConfiguredHandlers(
-        handlerDir,
-        nextConfig.handlers,
-        projectRoot,
-        runtimeParams
-      );
-      compiledPatterns = createCompiledPatterns(nextConfig.patterns);
-      lastConfigSignature = getStatsSignature(tryStat(configPath));
-      rebuildCurrentPathIndex();
-
-      const nextDirectories = new Set();
-
-      for (const { pattern } of compiledPatterns) {
-        const fixedPrefix = getFixedPatternPrefix(pattern);
-
-        for (const scanRoot of listProjectScanRoots(projectRoot, fixedPrefix, runtimeParams)) {
-          const baseDirectory = getExistingWatchBase(scanRoot);
-          walkDirectories(baseDirectory, nextDirectories);
-        }
-      }
-
-      closeRemovedWatchers(nextDirectories);
-
-      for (const directoryPath of nextDirectories) {
-        watchDirectory(directoryPath);
-      }
-
-      await initializeHandlers();
-    } finally {
-      refreshInProgress = false;
-
-      if (pendingRefresh) {
-        pendingRefresh = false;
-        await refresh();
-      }
-    }
+    return enqueueOperation(async () => refreshInternal());
   }
 
   async function refreshSafely() {
@@ -773,57 +1417,14 @@ export function createWatchdog(options = {}) {
   }
 
   async function processPendingPathChanges() {
-    if (pathSyncInProgress || refreshInProgress) {
-      if (refreshInProgress) {
-        schedulePathSync();
-      }
+    const pathsToSync = [...pendingChangedPaths];
+    pendingChangedPaths.clear();
 
+    if (pathsToSync.length === 0) {
       return;
     }
 
-    pathSyncInProgress = true;
-
-    try {
-      const pathsToSync = [...pendingChangedPaths];
-      pendingChangedPaths.clear();
-
-      if (pathsToSync.length === 0) {
-        return;
-      }
-
-      let changed = false;
-      const changes = [];
-
-      for (const targetPath of pathsToSync) {
-        const change = createChangeEvent(targetPath);
-
-        if (change.projectPath && isIgnoredProjectPath(change.projectPath)) {
-          continue;
-        }
-
-        changes.push(change);
-
-        if (syncAbsolutePath(targetPath)) {
-          changed = true;
-        }
-      }
-
-      if (changed || changes.length > 0) {
-        await notifyHandlers(changes);
-      }
-    } finally {
-      pathSyncInProgress = false;
-
-      if (pendingRefresh) {
-        pendingRefresh = false;
-        await refresh();
-        return;
-      }
-
-      if (pendingChangedPaths.size > 0) {
-        schedulePathSync();
-      }
-    }
+    await enqueueOperation(async () => applyAbsolutePathChanges(pathsToSync));
   }
 
   async function processPendingPathChangesSafely() {
@@ -832,17 +1433,12 @@ export function createWatchdog(options = {}) {
     } catch (error) {
       console.error("Failed to apply watched file changes incrementally.");
       console.error(error);
-      scheduleRefresh();
+      void refreshSafely();
     }
   }
 
   function scheduleRefresh() {
-    if (refreshTimer) {
-      clearTimeout(refreshTimer);
-    }
-
-    refreshTimer = setTimeout(() => {
-      refreshTimer = null;
+    setTimeout(() => {
       void refreshSafely();
     }, REFRESH_DEBOUNCE_MS);
   }
@@ -872,38 +1468,90 @@ export function createWatchdog(options = {}) {
     }, reconcileIntervalMs);
   }
 
-  function getConfiguredHandlers() {
-    return configuredHandlers.map((handler) => ({
-      name: handler.name,
-      patterns: [...handler.patterns]
-    }));
+  async function applyProjectPathChanges(projectPaths, options = {}) {
+    const normalizedProjectPaths = [
+      ...new Set(
+        (Array.isArray(projectPaths) ? projectPaths : [])
+          .map((projectPath) =>
+            normalizeProjectPath(projectPath, {
+              isDirectory: String(projectPath || "").endsWith("/")
+            })
+          )
+          .filter(Boolean)
+      )
+    ];
+
+    if (normalizedProjectPaths.length === 0) {
+      return {
+        delta: null,
+        projectPaths: [],
+        version: getCurrentVersion()
+      };
+    }
+
+    if (replica) {
+      throw new Error("Replica watchdogs cannot scan authoritative filesystem changes.");
+    }
+
+    const expandedProjectPaths = expandProjectSyncTargets(normalizedProjectPaths);
+    const absolutePaths = expandedProjectPaths.map((projectPath) =>
+      toAbsolutePath(projectRoot, projectPath, runtimeParams)
+    );
+
+    return enqueueOperation(async () =>
+      applyAbsolutePathChanges(absolutePaths, {
+        emit: options.emit,
+        projectPaths: normalizedProjectPaths
+      })
+    );
   }
 
-  function getWatchConfig() {
-    return {
-      handlers: getConfiguredHandlers()
-    };
+  async function applySnapshot(snapshot, options = {}) {
+    return enqueueOperation(async () => applySnapshotInternal(snapshot, options));
   }
 
-  function getPathIndex() {
-    return handlerStates.get("path_index") || Object.create(null);
+  async function applyStateDelta(delta, options = {}) {
+    return enqueueOperation(async () => applyDeltaInternal(delta, options));
   }
 
   return {
+    applyProjectPathChanges,
+    applySnapshot,
+    applyStateDelta,
     covers(projectPath) {
       return matchesCompiledPatterns(compiledPatterns, projectPath);
     },
     getConfiguredHandlers,
     getIndex(name) {
-      return handlerStates.get(name);
+      if (name === "group_index") {
+        return getRuntimeGroupIndex();
+      }
+
+      if (name === "path_index") {
+        return currentPathIndex;
+      }
+
+      if (name === "user_index") {
+        return getRuntimeUserIndex();
+      }
+
+      return handlerStates.get(name) || null;
     },
     getPaths() {
-      return Object.keys(getPathIndex()).sort((left, right) => left.localeCompare(right));
+      return Object.keys(currentPathIndex).sort((left, right) => left.localeCompare(right));
+    },
+    getSnapshot,
+    getStateSystem() {
+      return stateSystem;
+    },
+    getVersion() {
+      return getCurrentVersion();
     },
     getWatchConfig,
     hasPath(projectPath) {
-      const pathIndex = getPathIndex();
-      return getProjectPathLookupCandidates(projectPath).some((candidate) => candidate && pathIndex[candidate]);
+      return getProjectPathLookupCandidates(projectPath).some(
+        (candidate) => candidate && Boolean(currentPathIndex[candidate])
+      );
     },
     refresh,
     async start() {
@@ -911,21 +1559,25 @@ export function createWatchdog(options = {}) {
         return;
       }
 
-      await refresh();
-
-      if (watchConfig) {
-        startConfigWatcher();
+      if (replica && initialSnapshot) {
+        await applySnapshotInternal(initialSnapshot, {
+          emit: false
+        });
+      } else {
+        await refresh();
       }
 
-      startReconcileLoop();
+      if (!replica) {
+        if (watchConfig) {
+          startConfigWatcher();
+        }
+
+        startReconcileLoop();
+      }
+
       started = true;
     },
     stop() {
-      if (refreshTimer) {
-        clearTimeout(refreshTimer);
-        refreshTimer = null;
-      }
-
       if (pathSyncTimer) {
         clearTimeout(pathSyncTimer);
         pathSyncTimer = null;
@@ -945,8 +1597,22 @@ export function createWatchdog(options = {}) {
         watcher.close();
       }
 
+      pendingChangedPaths.clear();
       directoryWatchers.clear();
       started = false;
+    },
+    subscribe(listener) {
+      if (typeof listener !== "function") {
+        return () => {};
+      }
+
+      snapshotListeners.add(listener);
+      return () => {
+        snapshotListeners.delete(listener);
+      };
+    },
+    waitForVersion(minVersion, options = {}) {
+      return stateSystem.waitForVersion(minVersion, options);
     }
   };
 }

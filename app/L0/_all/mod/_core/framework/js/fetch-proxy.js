@@ -1,4 +1,8 @@
 import { buildProxyUrl, isProxyableExternalUrl } from "./proxy-url.js";
+import {
+  applyStateVersionRequestHeader,
+  observeStateVersionFromResponse
+} from "./state-version.js";
 
 const FETCH_PROXY_MARKER = Symbol.for("space.fetch-proxy-installed");
 const proxyFallbackOrigins = new Set();
@@ -39,6 +43,7 @@ function shouldRetryViaProxy(request, error) {
 async function buildProxiedFetchArgs(request, proxyPath) {
   const proxyUrl = buildProxyUrl(request.url, { proxyPath });
   const headers = new Headers(request.headers);
+  applyStateVersionRequestHeader(headers);
   const init = {
     method: request.method,
     headers,
@@ -56,7 +61,25 @@ async function buildProxiedFetchArgs(request, proxyPath) {
 
 async function fetchViaProxy(originalFetch, request, proxyPath) {
   const [proxyUrl, proxyInit] = await buildProxiedFetchArgs(request, proxyPath);
-  return originalFetch(proxyUrl, proxyInit);
+  const response = await originalFetch(proxyUrl, proxyInit);
+  observeStateVersionFromResponse(response);
+  return response;
+}
+
+function isSameOriginRequest(targetUrl) {
+  return new URL(targetUrl, window.location.href).origin === window.location.origin;
+}
+
+function withStateVersionHeader(request) {
+  if (!isSameOriginRequest(request.url)) {
+    return request;
+  }
+
+  const headers = new Headers(request.headers);
+  applyStateVersionRequestHeader(headers);
+  return new Request(request, {
+    headers
+  });
 }
 
 export function installFetchProxy(options = {}) {
@@ -70,10 +93,12 @@ export function installFetchProxy(options = {}) {
   const originalFetch = currentFetch.bind(window);
 
   async function proxiedFetch(input, init) {
-    const request = new Request(input, init);
+    const request = withStateVersionHeader(new Request(input, init));
 
     if (!isProxyableExternalUrl(request.url)) {
-      return originalFetch(request);
+      const response = await originalFetch(request);
+      observeStateVersionFromResponse(response);
+      return response;
     }
 
     if (requestSupportsProxyFallback(request) && hasProxyFallbackOrigin(request.url)) {

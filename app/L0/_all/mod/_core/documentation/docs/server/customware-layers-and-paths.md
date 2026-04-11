@@ -59,6 +59,7 @@ Current contract:
 - when a user folder is already over cap, only mutations that reduce that folder's net byte size are allowed
 - quota accounting is cached per resolved L2 owner root and updated by mutation deltas instead of rescanning on every write
 - other backend app-path mutation callers invalidate affected user quota cache entries through `recordAppPathMutations`, and Git history operations invalidate the affected cache when `.git` metadata may have changed
+- clustered workers still perform the filesystem mutation locally, but they must publish the exact changed logical paths back to the primary so quota, user, and group derived state stays aligned across workers
 
 ## Optional Git History
 
@@ -66,7 +67,7 @@ Current contract:
 
 Current contract:
 
-- the parameter defaults to `false`
+- the parameter defaults to `true`
 - each writable `L1/<group>/` and `L2/<user>/` root is its own local Git repository when history is enabled
 - mutations schedule a commit after 10 seconds of quiet for that owner root
 - if an owner root keeps receiving writes, the debounce drops to 5 seconds after 1 minute of waiting, 1 second after 5 minutes, and immediate commit after 10 minutes
@@ -133,3 +134,4 @@ This model explains why:
 - a stable `/mod/...` import may resolve to different backing files for different users
 - docs and skills can be delivered by normal modules
 - direct app-file reads and writes use logical layer paths even when writable storage is moved outside the repo
+- concrete changed file paths matter for incremental index rebuilds; publishing only a parent directory can leave derived state stale until a later reconcile

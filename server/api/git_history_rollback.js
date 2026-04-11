@@ -1,5 +1,6 @@
 import { createHttpError } from "../lib/customware/file_access.js";
 import { rollbackLayerHistory } from "../lib/customware/git_history.js";
+import { runTrackedMutation } from "../runtime/request_mutations.js";
 
 function readPayload(context) {
   return context.body && typeof context.body === "object" && !Buffer.isBuffer(context.body)
@@ -26,26 +27,18 @@ function readCommitHash(context) {
   );
 }
 
-async function refreshWatchdog(context) {
-  if (context.watchdog && typeof context.watchdog.refresh === "function") {
-    await context.watchdog.refresh();
-  }
-}
-
 export async function post(context) {
   try {
-    const result = await rollbackLayerHistory({
-      commitHash: readCommitHash(context),
-      path: readPath(context),
-      projectRoot: context.projectRoot,
-      runtimeParams: context.runtimeParams,
-      username: context.user?.username,
-      watchdog: context.watchdog
-    });
-
-    await refreshWatchdog(context);
-
-    return result;
+    return await runTrackedMutation(context, async () =>
+      rollbackLayerHistory({
+        commitHash: readCommitHash(context),
+        path: readPath(context),
+        projectRoot: context.projectRoot,
+        runtimeParams: context.runtimeParams,
+        username: context.user?.username,
+        watchdog: context.watchdog
+      })
+    );
   } catch (error) {
     throw createHttpError(error.message || "Git history rollback failed.", Number(error.statusCode) || 500);
   }

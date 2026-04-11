@@ -23,20 +23,7 @@ function createEmptyUserRecord(username) {
 }
 
 function createEmptyUserIndex() {
-  return {
-    errors: [],
-    getSession() {
-      return null;
-    },
-    getUser() {
-      return null;
-    },
-    hasUser() {
-      return false;
-    },
-    sessions: Object.create(null),
-    users: Object.create(null)
-  };
+  return hydrateUserIndexSnapshot();
 }
 
 function ensureUser(users, username) {
@@ -59,6 +46,53 @@ function readJsonObject(filePath) {
 
     throw error;
   }
+}
+
+function hydrateUserIndexSnapshot(snapshot = {}) {
+  const users =
+    snapshot.users && typeof snapshot.users === "object" && !Array.isArray(snapshot.users)
+      ? {
+          ...snapshot.users
+        }
+      : Object.create(null);
+  const sessions =
+    snapshot.sessions && typeof snapshot.sessions === "object" && !Array.isArray(snapshot.sessions)
+      ? {
+          ...snapshot.sessions
+        }
+      : Object.create(null);
+  const errors = Array.isArray(snapshot.errors) ? [...snapshot.errors] : [];
+
+  return {
+    errors,
+    getSession(sessionVerifier) {
+      const normalizedVerifier = String(sessionVerifier || "").trim();
+      return normalizedVerifier ? sessions[normalizedVerifier] || null : null;
+    },
+    getUser(username) {
+      const normalizedUsername = String(username || "").trim();
+      return normalizedUsername ? users[normalizedUsername] || null : null;
+    },
+    hasUser(username) {
+      return Boolean(this.getUser(username));
+    },
+    sessions,
+    users
+  };
+}
+
+function serializeUserIndexSnapshot(snapshot = {}) {
+  const hydratedSnapshot = hydrateUserIndexSnapshot(snapshot);
+
+  return {
+    errors: [...hydratedSnapshot.errors],
+    sessions: {
+      ...hydratedSnapshot.sessions
+    },
+    users: {
+      ...hydratedSnapshot.users
+    }
+  };
 }
 
 function buildUserIndexSnapshot(context = {}) {
@@ -192,22 +226,16 @@ function buildUserIndexSnapshot(context = {}) {
     );
   });
 
-  return {
+  return hydrateUserIndexSnapshot({
     errors,
-    getSession(sessionVerifier) {
-      const normalizedVerifier = String(sessionVerifier || "").trim();
-      return normalizedVerifier ? sessions[normalizedVerifier] || null : null;
-    },
-    getUser(username) {
-      const normalizedUsername = String(username || "").trim();
-      return normalizedUsername ? users[normalizedUsername] || null : null;
-    },
-    hasUser(username) {
-      return Boolean(this.getUser(username));
-    },
     sessions,
     users
-  };
+  });
 }
 
-export { buildUserIndexSnapshot, createEmptyUserIndex };
+export {
+  buildUserIndexSnapshot,
+  createEmptyUserIndex,
+  hydrateUserIndexSnapshot,
+  serializeUserIndexSnapshot
+};
