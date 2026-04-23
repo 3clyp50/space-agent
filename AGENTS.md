@@ -95,6 +95,7 @@ App docs:
 - `/app/L0/_all/mod/_core/onscreen_agent/prompts/AGENTS.md`
 - `/app/L0/_all/mod/_core/onscreen_menu/AGENTS.md`
 - `/app/L0/_all/mod/_core/open_router/AGENTS.md`
+- `/app/L0/_all/mod/_core/openai_codex/AGENTS.md`
 - `/app/L0/_all/mod/_core/panels/AGENTS.md`
 - `/app/L0/_all/mod/_core/promptinclude/AGENTS.md`
 - `/app/L0/_all/mod/_core/router/AGENTS.md`
@@ -123,6 +124,7 @@ Server docs:
 - `/server/lib/customware/AGENTS.md`
 - `/server/lib/file_watch/AGENTS.md`
 - `/server/lib/git/AGENTS.md`
+- `/server/lib/openai_codex/AGENTS.md`
 - `/server/lib/share/AGENTS.md`
 - `/server/lib/tmp/AGENTS.md`
 - `/server/pages/AGENTS.md`

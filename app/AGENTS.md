@@ -53,6 +53,7 @@ Current module-local docs in the app tree:
 - `app/L0/_all/mod/_core/onscreen_agent/AGENTS.md`
 - `app/L0/_all/mod/_core/onscreen_menu/AGENTS.md`
 - `app/L0/_all/mod/_core/open_router/AGENTS.md`
+- `app/L0/_all/mod/_core/openai_codex/AGENTS.md`
 - `app/L1/_all/mod/metrics/posthog/AGENTS.md`
 - `app/L0/_admin/mod/_core/overlay_agent/AGENTS.md`
 

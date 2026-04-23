@@ -5,6 +5,10 @@ import * as prompt from "/mod/_core/admin/views/agent/prompt.js";
 import { mergeConsecutiveChatMessages } from "/mod/_core/framework/js/chat-messages.js";
 import * as proxyUrl from "/mod/_core/framework/js/proxy-url.js";
 import { getHuggingFaceManager } from "/mod/_core/huggingface/manager.js";
+import {
+  CODEX_STREAM_DONE_MARKER,
+  mapCodexEventToChatFrames
+} from "/mod/_core/openai_codex/sse_adapter.js";
 
 function createHeaders(apiKey) {
   const headers = {
@@ -406,6 +410,87 @@ async function readStreamingResponse(response, onDelta) {
   }
 }
 
+function parseCodexEventBlock(eventBlock, onDelta, meta) {
+  const lines = eventBlock.split(/\r?\n/u);
+
+  for (const line of lines) {
+    if (!line.startsWith("data:")) {
+      continue;
+    }
+
+    const value = line.slice(5).trim();
+
+    if (!value) {
+      continue;
+    }
+
+    let event;
+    try {
+      event = JSON.parse(value);
+    } catch {
+      continue;
+    }
+
+    // `mapCodexEventToChatFrames` throws on response.failed / error events,
+    // which bubbles up to the caller as a request failure. That is the
+    // intended behavior for terminal upstream errors mid-stream.
+    const frames = mapCodexEventToChatFrames(event);
+
+    for (const frame of frames) {
+      if (frame === CODEX_STREAM_DONE_MARKER) {
+        meta.sawDoneMarker = true;
+        return true;
+      }
+
+      const delta = extractStreamingDelta(frame);
+      noteCompletionPayload(meta, frame, delta);
+
+      if (delta) {
+        onDelta(delta);
+      }
+    }
+  }
+
+  return false;
+}
+
+async function readCodexStreamingResponse(response, onDelta) {
+  const meta = createCompletionResponseMeta("stream");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), {
+      stream: !done
+    });
+
+    let boundary = buffer.indexOf("\n\n");
+
+    while (boundary !== -1) {
+      const eventBlock = buffer.slice(0, boundary).trim();
+      buffer = buffer.slice(boundary + 2);
+
+      if (eventBlock && parseCodexEventBlock(eventBlock, onDelta, meta)) {
+        return finalizeCompletionResponseMeta(meta);
+      }
+
+      boundary = buffer.indexOf("\n\n");
+    }
+
+    if (done) {
+      const remaining = buffer.trim();
+
+      if (remaining) {
+        parseCodexEventBlock(remaining, onDelta, meta);
+      }
+
+      return finalizeCompletionResponseMeta(meta);
+    }
+  }
+}
+
 export const prepareAdminAgentApiRequest = globalThis.space.extend(
   import.meta,
   async function prepareAdminAgentApiRequest({
@@ -496,6 +581,62 @@ async function streamAdminAgentApiCompletion({ promptContext, settings, systemPr
   return readStreamingResponse(response, onDelta);
 }
 
+function parseAdminCodexTokens(settings) {
+  const raw = settings?.codexTokens;
+
+  if (!raw) {
+    return null;
+  }
+
+  if (typeof raw === "object") {
+    return raw;
+  }
+
+  if (typeof raw !== "string") {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function streamAdminAgentCodexCompletion({ promptContext, settings, systemPrompt, messages, onDelta, signal }) {
+  if (!settings?.model?.trim() && !settings?.codexModel?.trim()) {
+    throw new Error("Choose a Codex model before sending a message.");
+  }
+
+  const tokens = parseAdminCodexTokens(settings);
+
+  if (!tokens?.accessToken) {
+    const error = new Error("Sign in with ChatGPT before sending a message.");
+    error.requiresCodexLogin = true;
+    throw error;
+  }
+
+  const apiRequest = await prepareAdminAgentApiRequest({
+    messages,
+    promptContext,
+    settings,
+    systemPrompt
+  });
+  const response = await fetch(apiRequest.requestUrl, {
+    ...buildFetchRequestInit(apiRequest, signal)
+  });
+
+  if (!response.ok) {
+    await throwResponseError(response);
+  }
+
+  if (!response.body) {
+    throw new Error("Streaming response body is not available.");
+  }
+
+  return readCodexStreamingResponse(response, onDelta);
+}
+
 export async function streamAdminAgentCompletion({ promptContext, settings, systemPrompt, messages, onDelta, signal }) {
   const provider = config.normalizeAdminChatLlmProvider(settings?.provider);
   const normalizedPromptContext = normalizeAdminPromptContext(promptContext, systemPrompt);
@@ -510,6 +651,17 @@ export async function streamAdminAgentCompletion({ promptContext, settings, syst
     });
 
     return result.responseMeta;
+  }
+
+  if (provider === config.ADMIN_CHAT_LLM_PROVIDER.CODEX) {
+    return streamAdminAgentCodexCompletion({
+      messages,
+      onDelta,
+      promptContext: normalizedPromptContext,
+      settings,
+      signal,
+      systemPrompt: normalizedPromptContext.systemPrompt
+    });
   }
 
   return streamAdminAgentApiCompletion({
