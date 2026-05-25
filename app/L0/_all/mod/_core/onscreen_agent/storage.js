@@ -3,7 +3,7 @@ import {
   decodeStoredCodexTokens,
   encodeStoredCodexTokens
 } from "/mod/_core/openai_codex/token_envelope.js";
-import { CODEX_DEFAULT_MODEL_ID, normalizeCodexModelId } from "/mod/_core/openai_codex/models.js";
+import { normalizeCodexModelId } from "/mod/_core/openai_codex/models.js";
 
 const DISPLAY_MODE_FULL = "full";
 const DISPLAY_MODE_COMPACT = "compact";
@@ -222,7 +222,7 @@ async function normalizeStoredConfig(runtime, parsedConfig) {
     settings: {
       apiEndpoint: String(storedConfig.api_endpoint || storedConfig.apiEndpoint || config.DEFAULT_ONSCREEN_AGENT_SETTINGS.apiEndpoint || "").trim(),
       apiKey: storedApiKey.value,
-      codexModel: normalizeCodexModelId(storedConfig.codex_model || storedConfig.codexModel || CODEX_DEFAULT_MODEL_ID),
+      codexModel: normalizeCodexModelId(storedConfig.codex_model || storedConfig.codexModel || ""),
       codexTokens: storedCodexTokens.value,
       huggingfaceDtype: String(
         storedConfig.huggingface_dtype ||
@@ -292,7 +292,7 @@ async function buildStoredConfigPayload(runtime, { settings, systemPrompt }) {
   const payload = {
     api_endpoint: String(settings?.apiEndpoint || config.DEFAULT_ONSCREEN_AGENT_SETTINGS.apiEndpoint || "").trim(),
     api_key: await encodeStoredApiKey(runtime, settings),
-    codex_model: normalizeCodexModelId(settings?.codexModel || CODEX_DEFAULT_MODEL_ID),
+    codex_model: normalizeCodexModelId(settings?.codexModel || ""),
     huggingface_dtype: String(settings?.huggingfaceDtype || config.DEFAULT_ONSCREEN_AGENT_SETTINGS.huggingfaceDtype || "").trim(),
     huggingface_model: String(settings?.huggingfaceModel || config.DEFAULT_ONSCREEN_AGENT_SETTINGS.huggingfaceModel || "").trim(),
     local_provider: config.normalizeOnscreenAgentLocalProvider(settings?.localProvider),

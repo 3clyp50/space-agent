@@ -256,16 +256,19 @@
                         </p>
                         <label class="field">
                           <span>Model</span>
-                          <select x-model="$store.adminAgent.settingsDraft.codexModel">
+                          <select
+                            x-model="$store.adminAgent.settingsDraft.codexModel"
+                            :disabled="!$store.adminAgent.codexModelCatalog.length"
+                          >
+                            <option value="" disabled x-show="!$store.adminAgent.codexModelCatalog.length">
+                              No Codex models available
+                            </option>
                             <template x-for="entry in $store.adminAgent.codexModelCatalog" :key="entry.id">
-                              <option :value="entry.id" x-text="`${entry.id} — ${entry.description}`"></option>
-                            </template>
-                            <template x-if="!$store.adminAgent.isCodexSelectedModelInCatalog">
-                              <option :value="$store.adminAgent.settingsDraft.codexModel" x-text="$store.adminAgent.settingsDraft.codexModel"></option>
+                              <option :value="entry.id" x-text="entry.description ? `${entry.id} - ${entry.description}` : entry.id"></option>
                             </template>
                           </select>
-                          <p class="field-note" x-show="!$store.adminAgent.isCodexSelectedModelInCatalog">
-                            ⚠ Not currently listed for your account. Pick another model if chats fail.
+                          <p class="field-note" x-show="!$store.adminAgent.codexModelCatalog.length">
+                            The signed-in account did not return any Codex models.
                           </p>
                         </label>
                         <button type="button" class="secondary-button" @click="$store.adminAgent.clearCodexLogin()">

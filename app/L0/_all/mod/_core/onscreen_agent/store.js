@@ -101,50 +101,42 @@ function createCodexLoginState() {
   };
 }
 
-// Merge the live Codex catalog (discovered from the Codex models endpoint)
-// with the static fallback shipped in `models.js`. The runtime catalog wins
-// when both have the same id so live descriptions and the live ordering are
-// preserved, and any static-only entries trail the runtime ones so a user
-// with a broken or empty discovery response still has something to pick.
-function mergeCodexModelCatalogs(runtimeCatalog, staticCatalog) {
+// Normalize the live Codex catalog so only valid id/description pairs are
+// exposed to the dropdown and prompt summary.
+function normalizeCodexModelCatalog(runtimeCatalog) {
   const runtime = Array.isArray(runtimeCatalog) ? runtimeCatalog : [];
-  const staticList = Array.isArray(staticCatalog) ? staticCatalog : [];
   const seen = new Set();
   const merged = [];
 
   for (const entry of runtime) {
-    if (!entry || typeof entry.id !== "string" || !entry.id) {
+    const normalizedId = typeof entry?.id === "string" ? entry.id.trim() : "";
+
+    if (!normalizedId) {
       continue;
     }
 
-    if (seen.has(entry.id)) {
+    if (seen.has(normalizedId)) {
       continue;
     }
 
-    seen.add(entry.id);
+    seen.add(normalizedId);
     merged.push({
-      description: typeof entry.description === "string" ? entry.description : "",
-      id: entry.id
-    });
-  }
-
-  for (const entry of staticList) {
-    if (!entry || typeof entry.id !== "string" || !entry.id) {
-      continue;
-    }
-
-    if (seen.has(entry.id)) {
-      continue;
-    }
-
-    seen.add(entry.id);
-    merged.push({
-      description: typeof entry.description === "string" ? entry.description : "",
-      id: entry.id
+      description: typeof entry?.description === "string" ? entry.description.trim() : "",
+      id: normalizedId
     });
   }
 
   return merged;
+}
+
+function isCodexModelIdInCatalog(catalog, value) {
+  const normalizedModelId = codexModels.normalizeCodexModelId(value);
+
+  if (!normalizedModelId || !Array.isArray(catalog)) {
+    return false;
+  }
+
+  return catalog.some((entry) => entry?.id === normalizedModelId);
 }
 
 function clonePromptBudgetRatios(value = {}) {
@@ -1710,19 +1702,12 @@ const model = {
   },
 
   get codexModelCatalog() {
-    return mergeCodexModelCatalogs(this.codexRuntimeCatalog, codexModels.CODEX_MODEL_CATALOG);
+    return normalizeCodexModelCatalog(this.codexRuntimeCatalog);
   },
 
   get isCodexSelectedModelInCatalog() {
-    const selected = typeof this.settingsDraft?.codexModel === "string"
-      ? this.settingsDraft.codexModel.trim()
-      : "";
-
-    if (!selected) {
-      return true;
-    }
-
-    return this.codexModelCatalog.some((entry) => entry.id === selected);
+    const selected = codexModels.normalizeCodexModelId(this.settingsDraft?.codexModel);
+    return !selected || isCodexModelIdInCatalog(this.codexModelCatalog, selected);
   },
 
   get isCodexLoginActive() {
@@ -4542,8 +4527,8 @@ const model = {
     });
 
     // Kick off live Codex catalog discovery so a signed-in user sees the
-    // models actually available to their account. Failures fall back to the
-    // shipped static catalog so the dropdown always has entries.
+    // models actually available to their account. Failures fall back to an
+    // empty list.
     void this.refreshCodexModelCatalog().catch((error) => {
       this.reportError("refreshing the Codex model catalog", error, {
         preserveStatus: true
@@ -4572,10 +4557,15 @@ const model = {
       });
     }
 
-    if (this.isSettingsDraftUsingCodexProvider && !this.settingsDraft.codexModel) {
+    if (
+      this.isSettingsDraftUsingCodexProvider &&
+      !isCodexModelIdInCatalog(this.codexModelCatalog, this.settingsDraft.codexModel)
+    ) {
+      const nextModel = codexModels.getDefaultCodexModelId(this.codexModelCatalog);
+
       this.settingsDraft = {
         ...this.settingsDraft,
-        codexModel: codexModels.CODEX_DEFAULT_MODEL_ID
+        codexModel: nextModel
       };
     }
   },
@@ -4608,6 +4598,7 @@ const model = {
 
       this.settingsDraft = {
         ...this.settingsDraft,
+        codexModel: "",
         codexTokens: serializeCodexTokensDraft(tokens)
       };
       this.codexLoginState = createCodexLoginState();
@@ -4643,8 +4634,11 @@ const model = {
   clearCodexLogin() {
     this.settingsDraft = {
       ...this.settingsDraft,
+      codexModel: "",
       codexTokens: ""
     };
+    this.codexRuntimeCatalog = [];
+    this.codexCatalogFetchedAt = 0;
     this.codexLoginState = createCodexLoginState();
   },
 
@@ -4652,8 +4646,7 @@ const model = {
   // in-memory with a 10-minute TTL so opening the settings dialog repeatedly
   // does not spam the Codex models endpoint. Concurrent callers coalesce
   // through the shared in-flight promise. A failed discovery (network, CORS,
-  // missing tokens) resolves with an empty runtime catalog so the static
-  // fallback in `models.js` remains selectable.
+  // missing tokens) resolves with an empty runtime catalog.
   async refreshCodexModelCatalog({ force = false } = {}) {
     if (!force && this.codexCatalogPromise) {
       return this.codexCatalogPromise;
@@ -4663,7 +4656,7 @@ const model = {
       return this.codexRuntimeCatalog;
     }
 
-    const tokens = parseCodexTokensDraft(this.settings?.codexTokens);
+    const tokens = parseCodexTokensDraft(this.settingsDraft?.codexTokens ?? this.settings?.codexTokens);
     const accessToken = typeof tokens?.accessToken === "string" ? tokens.accessToken.trim() : "";
 
     if (!accessToken) {
@@ -4679,7 +4672,27 @@ const model = {
           accessToken,
           chatGPTAccountId: accountId
         });
-        this.codexRuntimeCatalog = Array.isArray(catalog) ? catalog : [];
+        this.codexRuntimeCatalog = normalizeCodexModelCatalog(catalog);
+        const defaultCodexModel = codexModels.getDefaultCodexModelId(this.codexRuntimeCatalog);
+
+        if (defaultCodexModel) {
+          if (!isCodexModelIdInCatalog(this.codexRuntimeCatalog, this.settings?.codexModel)) {
+            this.settings = {
+              ...this.settings,
+              codexModel: defaultCodexModel
+            };
+          }
+
+          if (
+            this.isSettingsDraftUsingCodexProvider &&
+            !isCodexModelIdInCatalog(this.codexRuntimeCatalog, this.settingsDraft?.codexModel)
+          ) {
+            this.settingsDraft = {
+              ...this.settingsDraft,
+              codexModel: defaultCodexModel
+            };
+          }
+        }
       } catch {
         this.codexRuntimeCatalog = [];
       } finally {
@@ -4883,6 +4896,18 @@ const model = {
 
         if (!huggingfaceModel || !huggingfaceDtype) {
           throw new Error("Choose a Hugging Face model and dtype before saving.");
+        }
+      }
+
+      if (provider === config.ONSCREEN_AGENT_LLM_PROVIDER.CODEX) {
+        const codexModel = codexModels.normalizeCodexModelId(this.settingsDraft.codexModel);
+
+        if (!codexModel) {
+          throw new Error("Choose a Codex model before saving.");
+        }
+
+        if (!isCodexModelIdInCatalog(this.codexModelCatalog, codexModel)) {
+          throw new Error("Choose a Codex model returned by your signed-in account.");
         }
       }
     } catch (error) {

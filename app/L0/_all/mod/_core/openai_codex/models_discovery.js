@@ -12,7 +12,7 @@ function normalizeText(value) {
 // infrastructure shared with other cross-origin reads and does not require a
 // new backend endpoint. When the runtime does not expose the proxy helper
 // (e.g. test environment without the framework namespace), discovery returns
-// an empty list so callers fall back to the static catalog.
+// an empty list.
 function resolveProxyUrl(targetUrl) {
   const runtimeProxy = globalThis.space?.proxy;
 

@@ -76,7 +76,8 @@ Prompt rules:
 
 Current behavior:
 
-- the LLM settings modal keeps one provider switch at the top with three tabs named `API`, `ChatGPT`, and `Local`; API settings show endpoint, model, and API key fields, the `ChatGPT` tab owns the OpenAI Codex OAuth device-code login plus a model dropdown sourced from `/mod/_core/openai_codex/models.js`, and the `Local` section mounts the shared Hugging Face sidebar
+- the LLM settings modal keeps one provider switch at the top with three tabs named `API`, `ChatGPT`, and `Local`; API settings show endpoint, model, and API key fields, the `ChatGPT` tab owns the OpenAI Codex OAuth device-code login plus a model dropdown sourced only from `discoverCodexModels(...)` via the signed-in account catalog, and the `Local` section mounts the shared Hugging Face sidebar
+- the ChatGPT model dropdown must not add stale saved model ids as fallback options; when a live catalog is available, stale or blank selections are replaced by the first returned model, and saving Codex settings requires the selected model to appear in the live catalog
 - the `ChatGPT` tab scope is local to the admin chat: users sign in separately in the overlay settings to enable Codex there too, and refresh tokens for admin are stored in `~/conf/admin-chat.yaml` under a `userCrypto:`-prefixed `codex_tokens` entry, independent of the overlay config
 - the `Local` section only supports the Hugging Face browser runtime
 - the toolbar LLM settings button summarizes the current selection with the configured model name only; it does not prepend provider labels such as `API`, `Local`, or `Hugging Face`

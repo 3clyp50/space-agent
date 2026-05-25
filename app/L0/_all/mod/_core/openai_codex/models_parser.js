@@ -21,7 +21,7 @@ function normalizeText(value) {
 //
 // Output is sorted by `(priority, slug)` ascending to match the Codex client
 // reference ordering, and shaped as `{ id, description }` so the settings UI
-// can consume the live catalog with the same reducer as the static fallback.
+// can consume the live catalog.
 export function parseCodexModelsResponse(payload) {
   const entries = Array.isArray(payload?.models) ? payload.models : [];
   const result = [];

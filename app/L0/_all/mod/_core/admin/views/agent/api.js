@@ -604,7 +604,7 @@ function parseAdminCodexTokens(settings) {
 }
 
 async function streamAdminAgentCodexCompletion({ promptContext, settings, systemPrompt, messages, onDelta, signal }) {
-  if (!settings?.model?.trim() && !settings?.codexModel?.trim()) {
+  if (!settings?.codexModel?.trim()) {
     throw new Error("Choose a Codex model before sending a message.");
   }
 

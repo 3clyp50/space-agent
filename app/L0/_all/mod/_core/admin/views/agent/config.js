@@ -1,5 +1,4 @@
 import { DEFAULT_PROMPT_BUDGET_RATIOS, normalizePromptBudgetRatios } from "/mod/_core/agent_prompt/prompt-items.js";
-import { CODEX_DEFAULT_MODEL_ID } from "/mod/_core/openai_codex/models.js";
 
 export const ADMIN_CHAT_CONFIG_PATH = "~/conf/admin-chat.yaml";
 export const ADMIN_CHAT_HISTORY_PATH = "~/hist/admin-chat.json";
@@ -17,7 +16,7 @@ export const ADMIN_CHAT_LOCAL_PROVIDER = {
 export const DEFAULT_ADMIN_CHAT_SETTINGS = {
   apiEndpoint: "https://openrouter.ai/api/v1/chat/completions",
   apiKey: "",
-  codexModel: CODEX_DEFAULT_MODEL_ID,
+  codexModel: "",
   codexTokens: "",
   huggingfaceDtype: "q4",
   huggingfaceModel: "",

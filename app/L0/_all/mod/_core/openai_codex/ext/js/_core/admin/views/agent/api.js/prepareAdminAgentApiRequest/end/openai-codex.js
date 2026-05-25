@@ -94,10 +94,12 @@ export default async function openAiCodexAdminRequestHook(hookContext) {
   });
 
   const chatBody = isObject(apiRequest.requestBody) ? apiRequest.requestBody : {};
-  const model =
-    typeof settings?.codexModel === "string" && settings.codexModel.trim()
-      ? settings.codexModel.trim()
-      : chatBody.model;
+  const model = typeof settings?.codexModel === "string" ? settings.codexModel.trim() : "";
+
+  if (!model) {
+    throw new Error("Choose a Codex model before sending a message.");
+  }
+
   const codexBody = chatToResponsesRequest({ ...chatBody, model });
   const proxiedRequestUrl = resolveCodexProxyRequestUrl(CODEX_RESPONSES_ENDPOINT);
   const withHeaders = applyCodexHeaders(

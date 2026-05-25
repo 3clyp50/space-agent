@@ -19,15 +19,16 @@ This module owns:
 - `sse_adapter.js`: pure stateless mapper from Codex Responses-API SSE events into the existing Chat-Completions-shaped delta frames that `_core/onscreen_agent/api.js` and `_core/admin/views/agent/api.js` already parse
 - `token_manager.js`: browser-side helper that wraps the three OAuth backend endpoints (`/api/openai_codex_auth_start`, `/api/openai_codex_auth_poll`, `/api/openai_codex_token_refresh`) and enforces always-fresh-read refresh semantics with a single-flight coalescer per refresh token. The coalescer is per-tab only: two browser tabs against the same account still issue two parallel refresh requests, and cross-tab serialization relies on the server-side mutex in `server/lib/openai_codex/refresh_lock.js` (which itself is per-worker; see the known-limitations note in `/server/lib/openai_codex/AGENTS.md`).
 - `auth_flow.js`: stateful controller that drives the end-to-end device-code login UX from the settings dialog, emitting `STARTING` / `PENDING` / `COMPLETE` / `FAILED` status events and polling the backend at the interval the OAuth server returns
-- `models.js`: shipped static Codex model catalog used as a fallback by the settings UI, with `CODEX_DEFAULT_MODEL_ID` pointing at the cheapest and fastest option suitable for a ChatGPT Plus subscription
+- `models.js`: helpers for Codex-model id normalization and default selection from the live discovered catalog
 - `models_parser.js`: pure `parseCodexModelsResponse(payload)` that converts the Codex `/backend-api/codex/models` response into `{ id, description }` entries, filters out unsupported or hidden variants, and sorts by `(priority, slug)` to match the reference Codex client ordering
-- `models_discovery.js`: browser-side `discoverCodexModels({ accessToken, chatGPTAccountId })` helper that fetches the live catalog with `applyCodexHeaders()` through the space-agent outbound proxy (`space.proxy.buildUrl(...)` -> `/api/proxy`). A direct browser fetch against `chatgpt.com/backend-api/codex/models` is always blocked because the endpoint sends no `Access-Control-Allow-Origin` header, so we route through the existing proxy infrastructure on every call rather than attempting a doomed direct request first. Any failure returns an empty array so callers can fall back to the static catalog.
+- `models_discovery.js`: browser-side `discoverCodexModels({ accessToken, chatGPTAccountId })` helper that fetches the live catalog with `applyCodexHeaders()` through the space-agent outbound proxy (`space.proxy.buildUrl(...)` -> `/api/proxy`). A direct browser fetch against `chatgpt.com/backend-api/codex/models` is always blocked because the endpoint sends no `Access-Control-Allow-Origin` header, so we route through the existing proxy infrastructure on every call rather than attempting a doomed direct request first.
 
 ## Local Contracts
 
 - this module contributes behavior only through JS extension hooks, shared helpers, and the dedicated LLM-client subclass; it must not fork or duplicate the admin or onscreen chat runtimes
 - the two shipped extension hooks gate on `settings.provider === "openai-codex"` so they only rewrite requests for the Codex provider and leave OpenRouter or other OpenAI-compatible provider requests untouched
 - the shipped URL constants (`CODEX_BASE_URL`, `CODEX_RESPONSES_ENDPOINT`, `CODEX_MODELS_ENDPOINT`) are consumed directly; there is no endpoint-detection helper because the provider-setting gate removes the need for it
+- Codex request hooks must take the outbound model only from `settings.codexModel`; never fall back to the API-tab `settings.model`, because that value belongs to OpenRouter or another OpenAI-compatible provider and may not be a Codex-entitled model
 - provider-specific HTTP policy belongs here or in similar headless provider modules, not hard-coded into `_core/onscreen_agent/llm.js` or `_core/admin/views/agent/api.js`
 - the Codex `/responses` endpoint rejects `max_output_tokens` and `temperature` with HTTP 400; `request_shape.js` strips both before producing the outbound body
 - the Codex `/responses` endpoint streams its own SSE event family, not the Chat-Completions `data: {choices:[...]}` stream; the SSE adapter here is the single source of truth for translating between the two formats
@@ -123,7 +124,7 @@ This module cannot be fully exercised without an active ChatGPT Plus subscriptio
 
 What reviewers can verify without a subscription:
 
-- **Pure-function tests**: `tests/openai_codex_*_test.mjs` covers request-shape conversion, SSE event mapping, the token manager's always-fresh-read and single-flight semantics, the shipped static model catalog, and the live-response parser. Run with `node --test tests/openai_codex_*_test.mjs` — 51 tests, no network access or credentials required.
+- **Pure-function tests**: `tests/openai_codex_*_test.mjs` covers request-shape conversion, SSE event mapping, the token manager's always-fresh-read and single-flight semantics, and the live-response parser. Run with `node --test tests/openai_codex_*_test.mjs`.
 - **Server endpoint registration**: `node space serve` starts cleanly and `curl -X POST http://127.0.0.1:3000/api/openai_codex_auth_start` returns HTTP 401 with `{"error":"Authentication required"}` (auth gate works, endpoint is registered).
 - **Module hierarchy**: check that `/mod/_core/openai_codex/*` modules import cleanly from both chat surfaces (no module resolution errors in the browser console on app boot).
 
@@ -132,7 +133,7 @@ What requires a ChatGPT Plus subscription to verify:
 - **Full OAuth device-code flow** (`_auth_start` → browser authorize → `_auth_poll` → tokens returned)
 - **First live chat turn** against `gpt-5.4-mini` or another Codex model
 - **Silent refresh** after access-token expiry (~1 hour)
-- **Live model-catalog discovery** (dropdown reflects the account's entitled models, not just the static fallback)
+- **Live model-catalog discovery** (dropdown reflects the account's entitled models, not just a baked-in default list)
 
 ## Development Guidance
 
